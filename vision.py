@@ -1,14 +1,17 @@
-"""Azure AI Vision food-photo recognition: tags (+ caption where available),
-fuzzy-matched against the existing food_items catalog. This is a suggestion
-aid, not an auto-logger — Azure AI Vision isn't food-specialized, so results
-are shown to the user to confirm/pick from, same as a manual search would be.
+"""Azure AI Vision food-photo recognition: tags + caption, fuzzy-matched
+against the existing food_items catalog. This is a suggestion aid, not an
+auto-logger — Azure AI Vision isn't food-specialized, so results are shown
+to the user to confirm/pick from, same as a manual search would be.
 
-Note: the 'caption' feature (Image Analysis 4.0) only runs in a handful of
-GPU-backed regions and is NOT available in australiaeast, where nutrilog's
-Vision resource lives — requesting it there fails the whole call with a 400.
-Defaulting to 'tags' only, which is available everywhere. Override via
-AZURE_VISION_FEATURES if the resource is ever moved/replaced with one in a
-supported region.
+Two Vision resources are used, in two different regions:
+  - AZURE_VISION_ENDPOINT/KEY (australiaeast) — 'tags' only.
+  - AZURE_VISION_CAPTION_ENDPOINT/KEY (southeastasia) — 'caption' only.
+The 'caption' feature (Image Analysis 4.0) only runs in a handful of
+GPU-backed regions and is NOT available in australiaeast — requesting it
+there fails the whole call with a 400, which is why it's split out to a
+second resource in a supported region instead of just adding it to the
+first one. The caption resource is optional: if unset, analyze_image()
+falls back to tags-only (same as before), it just degrades gracefully.
 """
 import difflib
 import os
@@ -17,8 +20,9 @@ import requests
 
 VISION_ENDPOINT = os.environ.get('AZURE_VISION_ENDPOINT', '').rstrip('/')
 VISION_KEY = os.environ.get('AZURE_VISION_KEY')
+VISION_CAPTION_ENDPOINT = os.environ.get('AZURE_VISION_CAPTION_ENDPOINT', '').rstrip('/')
+VISION_CAPTION_KEY = os.environ.get('AZURE_VISION_CAPTION_KEY')
 VISION_API_VERSION = os.environ.get('AZURE_VISION_API_VERSION', '2024-02-01')
-VISION_FEATURES = os.environ.get('AZURE_VISION_FEATURES', 'tags')
 
 
 def is_configured():
@@ -28,7 +32,7 @@ def is_configured():
 def analyze_image(image_bytes):
     """Returns {'caption': str, 'tags': [str]} from Azure AI Vision Image Analysis."""
     url = f'{VISION_ENDPOINT}/computervision/imageanalysis:analyze'
-    params = {'api-version': VISION_API_VERSION, 'features': VISION_FEATURES}
+    params = {'api-version': VISION_API_VERSION, 'features': 'tags'}
     headers = {
         'Ocp-Apim-Subscription-Key': VISION_KEY,
         'Content-Type': 'application/octet-stream',
@@ -36,11 +40,25 @@ def analyze_image(image_bytes):
     resp = requests.post(url, params=params, headers=headers, data=image_bytes, timeout=15)
     resp.raise_for_status()
     data = resp.json()
-    caption = (data.get('captionResult') or {}).get('text', '')
     tags = [
         t['name'] for t in (data.get('tagsResult') or {}).get('values', [])
         if t.get('confidence', 0) > 0.5
     ]
+
+    caption = ''
+    if VISION_CAPTION_ENDPOINT and VISION_CAPTION_KEY:
+        try:
+            cap_url = f'{VISION_CAPTION_ENDPOINT}/computervision/imageanalysis:analyze'
+            cap_resp = requests.post(
+                cap_url, params={'api-version': VISION_API_VERSION, 'features': 'caption'},
+                headers={'Ocp-Apim-Subscription-Key': VISION_CAPTION_KEY, 'Content-Type': 'application/octet-stream'},
+                data=image_bytes, timeout=15,
+            )
+            cap_resp.raise_for_status()
+            caption = (cap_resp.json().get('captionResult') or {}).get('text', '')
+        except requests.RequestException:
+            pass  # caption is a nice-to-have; tags alone still work
+
     return {'caption': caption, 'tags': tags}
 
 
