@@ -161,6 +161,21 @@
   .btn-confirm:active { opacity: 0.85; }
   .btn-cancel { width: 100%; background: none; border: none; color: var(--text-muted); font-size: 0.9rem; cursor: pointer; margin-top: 10px; padding: 8px; }
 
+  /* Voice log */
+  .voice-fab { position: fixed; bottom: 92px; right: 16px; width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #0f1117; border: none; font-size: 1.5rem; box-shadow: 0 4px 14px rgba(0,0,0,0.3); cursor: pointer; z-index: 150; display: flex; align-items: center; justify-content: center; }
+  .voice-fab:active { opacity: 0.85; }
+  .voice-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
+  .voice-overlay.open { display: flex; }
+  .voice-card { background: var(--surface); border-radius: var(--radius); padding: 28px 22px; width: 100%; max-width: 360px; text-align: center; position: relative; }
+  .voice-card .modal-close { position: absolute; top: 10px; right: 12px; }
+  .voice-mic-icon { font-size: 2.6rem; margin: 6px 0 14px; }
+  .voice-mic-icon.listening { animation: voicePulse 1.2s ease-in-out infinite; }
+  @keyframes voicePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .voice-status { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px; }
+  .voice-transcript { font-size: 1.05rem; font-weight: 600; min-height: 1.4em; margin-bottom: 16px; }
+  .voice-fallback { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 10px 14px; font-size: 0.95rem; outline: none; margin-bottom: 12px; }
+  .voice-fallback:focus { border-color: var(--accent); }
+
   /* Nav bar */
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: flex; z-index: 100; }
   .nav-item { flex: 1; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; text-decoration: none; color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -234,6 +249,8 @@ function escapeHtmlSwitcher(str) {
   <div class="brand-footer"><img src="/public/assets/KingroupLogo.jpg" alt="Kin Group"></div>
 </div>
 
+<button class="voice-fab" id="voiceFab" type="button" title="Log by voice">🎤</button>
+
 <nav class="bottom-nav">
   <a class="nav-item active" href="/">
     <span class="nav-icon">📋</span>Log
@@ -284,6 +301,18 @@ function escapeHtmlSwitcher(str) {
   <div class="barcode-status" id="barcodeStatus"></div>
 </div>
 
+<!-- Voice log overlay -->
+<div class="voice-overlay" id="voiceOverlay">
+  <div class="voice-card">
+    <button class="modal-close" id="closeVoiceOverlay">×</button>
+    <div class="voice-mic-icon" id="voiceMicIcon">🎤</div>
+    <div class="voice-status" id="voiceStatus">Listening…</div>
+    <div class="voice-transcript" id="voiceTranscript"></div>
+    <input type="text" class="voice-fallback" id="voiceTextFallback" placeholder="Type what you ate…" style="display:none;" autocomplete="off">
+    <button class="btn-confirm" id="voiceSubmitText" style="display:none;">Log it</button>
+  </div>
+</div>
+
 <!-- Quantity modal -->
 <div class="qty-modal" id="qtyModal">
   <div class="qty-card">
@@ -310,6 +339,7 @@ let currentFoodItem = null;
 let currentQty = 1;
 let allFoods = [];
 let openSlots = new Set();
+let voicePendingQty = null;
 
 function isoDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -630,7 +660,8 @@ document.getElementById('foodModal').addEventListener('click', e => {
 
 function openQtyModal(food) {
   currentFoodItem = food;
-  currentQty = 1;
+  currentQty = voicePendingQty ?? 1;
+  voicePendingQty = null;
   document.getElementById('foodModal').classList.remove('open');
   document.getElementById('qtyItemName').textContent = food.name;
   document.getElementById('qtyItemServing').textContent = `Serving: ${food.serving_size}${food.serving_unit} = ${food.calories} kcal`;
@@ -666,6 +697,231 @@ document.getElementById('qtyCancel').onclick = () => {
   document.getElementById('qtyModal').classList.remove('open');
   document.getElementById('foodModal').classList.add('open');
 };
+
+// ── Voice logging ────────────────────────────────────────────────────────
+// Fully client-side: speech-to-text via the browser's Web Speech API (falls
+// back to a plain text input — e.g. Safari/iOS, where the user's own
+// keyboard dictation button produces the same result), then matched against
+// the foods/categories already loaded for this page. Reuses the existing
+// food-search + quantity-modal flow rather than building a parallel one —
+// a confident single match jumps straight to the quantity modal (pre-filled
+// with any amount mentioned, but always shown so the user can confirm/adjust
+// — nothing is logged without that step); anything ambiguous falls back to
+// the normal search list, pre-filled with the parsed query, for the user to
+// pick from — same "ask for amount" guarantee either way.
+
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+let voiceRecognition = null;
+
+const VOICE_NUMBER_WORDS = {
+  half: 0.5, a: 1, an: 1, one: 1, single: 1, couple: 2, two: 2, few: 3, three: 3,
+  four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12,
+};
+
+function parseVoiceQuantity(text) {
+  let m = text.match(/\bhalf\s+(?:a|an)\b/i);
+  if (m) return { qty: 0.5, remaining: text.replace(m[0], '').trim() };
+
+  m = text.match(/\bcouple\s+of\b/i);
+  if (m) return { qty: 2, remaining: text.replace(m[0], '').trim() };
+
+  m = text.match(/\b(\d+(?:\.\d+)?)\b/);
+  if (m) return { qty: parseFloat(m[1]), remaining: text.replace(m[0], '').trim() };
+
+  for (const [word, val] of Object.entries(VOICE_NUMBER_WORDS)) {
+    const re = new RegExp(`\\b${word}\\b`, 'i');
+    if (re.test(text)) return { qty: val, remaining: text.replace(re, '').trim() };
+  }
+  return { qty: null, remaining: text };
+}
+
+const VOICE_MEAL_KEYWORDS = {
+  breakfast: ['breakfast', 'brekky'],
+  morning: ['morning tea', 'morning snack'],
+  lunch: ['lunch', 'midday'],
+  afternoon: ['afternoon tea', 'afternoon snack'],
+  dinner: ['dinner', 'tea', 'supper'],
+  snack: ['snack'],
+  drink: ['drink', 'beverage'],
+};
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function detectVoiceSlot(text) {
+  const lower = text.toLowerCase();
+
+  // 1. Direct match against the user's own category names — always wins,
+  // since these are exactly what the user would actually say.
+  for (const cat of categories) {
+    const name = cat.name.toLowerCase();
+    const re = new RegExp(`\\b${escapeRegex(name)}\\b`);
+    if (re.test(lower)) return { catId: cat.id, matchedText: name };
+  }
+
+  // 2. Common synonyms, matched against whichever category name contains
+  // that keyword's canonical word (handles e.g. renamed/custom catalogs).
+  for (const [canonical, synonyms] of Object.entries(VOICE_MEAL_KEYWORDS)) {
+    for (const syn of synonyms) {
+      const re = new RegExp(`\\b${escapeRegex(syn)}\\b`);
+      if (re.test(lower)) {
+        const cat = categories.find(c => c.name.toLowerCase().includes(canonical));
+        if (cat) return { catId: cat.id, matchedText: syn };
+      }
+    }
+  }
+
+  // 3. Nothing said about it — guess from time of day.
+  const hour = new Date().getHours();
+  const guess = hour < 10 ? 'breakfast' : hour < 12 ? 'morning' : hour < 14 ? 'lunch'
+    : hour < 17 ? 'afternoon' : hour < 21 ? 'dinner' : 'snack';
+  const guessed = categories.find(c => c.name.toLowerCase().includes(guess));
+  if (guessed) return { catId: guessed.id, matchedText: null };
+
+  // 4. Fully custom catalog with no recognizable name — spread categories
+  // proportionally across the day rather than always defaulting to the first.
+  if (categories.length) {
+    const idx = Math.min(categories.length - 1, Math.floor((hour / 24) * categories.length));
+    return { catId: categories[idx].id, matchedText: null };
+  }
+  return { catId: null, matchedText: null };
+}
+
+function parseVoiceTranscript(rawText) {
+  let text = rawText.trim();
+  const slotResult = detectVoiceSlot(text);
+  if (slotResult.matchedText) {
+    text = text.replace(new RegExp(`\\b${escapeRegex(slotResult.matchedText)}\\b`, 'i'), '').trim();
+  }
+  text = text.replace(/\b(?:for|at)\s*$/i, '').trim();
+
+  const qtyResult = parseVoiceQuantity(text);
+  text = qtyResult.remaining.replace(/^\s*of\b/i, '').trim();
+
+  return { cleanQuery: text, quantity: qtyResult.qty || 1, catId: slotResult.catId };
+}
+
+function scoreFoodMatch(query, item) {
+  const queryLower = query.toLowerCase().trim();
+  const nameLower = item.name.toLowerCase();
+  if (!queryLower) return 0;
+  if (nameLower === queryLower) return 1;
+
+  const qWords = queryLower.split(/\s+/).filter(Boolean);
+  const nameWords = new Set(nameLower.split(/\s+/).filter(Boolean));
+  const overlap = qWords.filter(w => nameWords.has(w)).length;
+  let score = overlap / qWords.length;
+  if (nameLower.includes(queryLower) || queryLower.includes(nameLower)) score = Math.max(score, 0.8);
+  return score;
+}
+
+function matchFoodsForVoice(query) {
+  return allFoods
+    .map(item => ({ item, score: scoreFoodMatch(query, item) }))
+    .filter(r => r.score > 0.35)
+    .sort((a, b) => b.score - a.score);
+}
+
+function setVoiceListening(isListening) {
+  document.getElementById('voiceMicIcon').classList.toggle('listening', isListening);
+}
+
+function openVoiceOverlay() {
+  if (categories.length === 0) { alert('Still loading — try again in a moment.'); return; }
+
+  document.getElementById('voiceOverlay').classList.add('open');
+  document.getElementById('voiceTranscript').textContent = '';
+  const fallback = document.getElementById('voiceTextFallback');
+  const submitBtn = document.getElementById('voiceSubmitText');
+
+  if (SpeechRecognitionCtor) {
+    fallback.style.display = 'none';
+    submitBtn.style.display = 'none';
+    document.getElementById('voiceStatus').textContent = 'Listening…';
+    startVoiceRecognition();
+  } else {
+    setVoiceListening(false);
+    document.getElementById('voiceStatus').textContent = 'Type what you ate, or use your keyboard’s dictation button';
+    fallback.style.display = 'block';
+    submitBtn.style.display = 'block';
+    fallback.value = '';
+    setTimeout(() => fallback.focus(), 100);
+  }
+}
+
+function startVoiceRecognition() {
+  setVoiceListening(true);
+  voiceRecognition = new SpeechRecognitionCtor();
+  voiceRecognition.lang = 'en-AU';
+  voiceRecognition.interimResults = true;
+  voiceRecognition.maxAlternatives = 1;
+
+  voiceRecognition.onresult = (event) => {
+    let interim = '', final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) final += transcript;
+      else interim += transcript;
+    }
+    document.getElementById('voiceTranscript').textContent = final || interim;
+    if (final) {
+      voiceRecognition.stop();
+      finishVoiceCapture(final);
+    }
+  };
+  voiceRecognition.onerror = () => {
+    setVoiceListening(false);
+    document.getElementById('voiceStatus').textContent = "Didn't catch that — try again, or type below.";
+    document.getElementById('voiceTextFallback').style.display = 'block';
+    document.getElementById('voiceSubmitText').style.display = 'block';
+  };
+  voiceRecognition.onend = () => setVoiceListening(false);
+  voiceRecognition.start();
+}
+
+function closeVoiceOverlay() {
+  if (voiceRecognition) { try { voiceRecognition.stop(); } catch (e) {} voiceRecognition = null; }
+  setVoiceListening(false);
+  document.getElementById('voiceOverlay').classList.remove('open');
+}
+
+function finishVoiceCapture(transcript) {
+  closeVoiceOverlay();
+  const { cleanQuery, quantity, catId } = parseVoiceTranscript(transcript);
+  if (!catId) { alert("Couldn't figure out which meal to log this under — try the + Add button instead."); return; }
+
+  currentSlot = catId;
+  const cat = categories.find(c => c.id === catId);
+
+  // Prep the food-picker modal in the background (even for a confident
+  // match) so Cancel from the quantity modal lands somewhere sensible
+  // instead of a stale/blank list.
+  document.getElementById('modalTitle').textContent = `Add to ${cat ? cat.name : 'meal'}`;
+  document.getElementById('searchInput').value = cleanQuery;
+  renderFoodList(cleanQuery);
+
+  const matches = matchFoodsForVoice(cleanQuery);
+  const confident = matches.length > 0 && matches[0].score >= 0.6 &&
+    (matches.length === 1 || matches[0].score - matches[1].score >= 0.25);
+
+  if (confident) {
+    voicePendingQty = quantity;
+    openQtyModal(matches[0].item);
+  } else {
+    document.getElementById('foodModal').classList.add('open');
+  }
+}
+
+document.getElementById('voiceFab').onclick = openVoiceOverlay;
+document.getElementById('closeVoiceOverlay').onclick = closeVoiceOverlay;
+document.getElementById('voiceSubmitText').onclick = () => {
+  const val = document.getElementById('voiceTextFallback').value.trim();
+  if (val) finishVoiceCapture(val);
+};
+document.getElementById('voiceTextFallback').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('voiceSubmitText').click();
+});
 
 async function refresh() {
   document.getElementById('dateLabel').textContent = formatDate(new Date(currentDate));
