@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>NutriLog · Calendar</title>
+<script>
+  (function() {
+    var saved = localStorage.getItem('nutrilog-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  })();
+</script>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface2: #f1f5f9;
+    --border: #e2e8f0;
+    --accent: #10b981;
+    --accent2: #6366f1;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --text: #0f172a;
+    --text-muted: #94a3b8;
+    --text-dim: #475569;
+    --radius: 14px;
+    --radius-sm: 8px;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3248;
+    --accent: #6ee7b7;
+    --accent2: #818cf8;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --text: #e2e8f0;
+    --text-muted: #64748b;
+    --text-dim: #94a3b8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3248;
+      --accent: #6ee7b7;
+      --accent2: #818cf8;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --text-dim: #94a3b8;
+    }
+  }
+  .theme-toggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; font-size: 0.95rem; cursor: pointer; flex-shrink: 0; }
+  .theme-toggle:active { background: var(--border); }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .logo { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: var(--accent); }
+
+  .view-toggle { display: flex; background: var(--surface2); border-radius: 10px; padding: 3px; margin: 12px 16px 0; }
+  .view-toggle button { flex: 1; background: none; border: none; color: var(--text-muted); padding: 8px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+  .view-toggle button.active { background: var(--accent); color: #0f1117; }
+
+  .nav-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 4px; }
+  .nav-row button { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  .nav-row .label { font-weight: 700; font-size: 0.95rem; }
+
+  .main-content { padding: 12px 16px 90px; }
+
+  /* MONTH GRID */
+  .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 6px; }
+  .weekday-row div { text-align: center; font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .day-cell { aspect-ratio: 1; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; padding: 4px; }
+  .day-cell.empty-cell { visibility: hidden; cursor: default; }
+  .day-cell .num { font-size: 0.8rem; font-weight: 600; }
+  .day-cell .cals { font-size: 0.6rem; color: var(--text-muted); margin-top: 2px; }
+  .day-cell.has-data.cal-low { background: rgba(129,140,248,0.15); border-color: var(--accent2); }
+  .day-cell.has-data.cal-normal { background: rgba(110,231,183,0.15); border-color: var(--accent); }
+  .day-cell.has-data.cal-high { background: rgba(245,158,11,0.15); border-color: var(--warn); }
+  .day-cell.today { box-shadow: 0 0 0 2px var(--accent) inset; }
+
+  /* WEEK STRIP */
+  .week-strip { display: flex; flex-direction: column; gap: 8px; }
+  .week-day-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .week-day-card.today { border-color: var(--accent); }
+  .week-day-left .wd-name { font-weight: 700; font-size: 0.9rem; }
+  .week-day-left .wd-date { font-size: 0.75rem; color: var(--text-muted); }
+  .week-day-right { text-align: right; }
+  .week-day-right .wd-cals { font-weight: 700; color: var(--accent); }
+  .week-day-right .wd-items { font-size: 0.7rem; color: var(--text-muted); }
+
+  /* LIST */
+  .list-rows { display: flex; flex-direction: column; gap: 8px; }
+  .list-row { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .list-row .lr-date { font-weight: 600; font-size: 0.88rem; }
+  .list-row .lr-meta { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+  .list-row .lr-cals { font-weight: 700; color: var(--accent); }
+
+  .empty-hint { text-align: center; padding: 30px 16px; color: var(--text-muted); font-size: 0.85rem; }
+  .brand-footer { display: flex; justify-content: center; padding: 12px 16px 8px; }
+  .brand-footer img { height: 26px; width: auto; border-radius: 5px; opacity: 0.9; }
+
+  .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: flex; z-index: 100; }
+  .nav-item { flex: 1; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; text-decoration: none; color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .nav-item.active { color: var(--accent); }
+  .nav-icon { font-size: 1.2rem; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Nutri<span>Log</span></div>
+  <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
+</div>
+
+<div class="view-toggle">
+  <button id="btnMonth" class="active">Month</button>
+  <button id="btnWeek">Week</button>
+  <button id="btnList">List</button>
+</div>
+
+<div class="nav-row" id="navRow">
+  <button id="prevBtn">‹</button>
+  <div class="label" id="rangeLabel"></div>
+  <button id="nextBtn">›</button>
+</div>
+
+<div class="main-content" id="mainContent"></div>
+<div class="brand-footer"><img src="/public/assets/KingroupLogo.jpg" alt="Kin Group"></div>
+
+<nav class="bottom-nav">
+  <a class="nav-item" href="/"><span class="nav-icon">📋</span>Log</a>
+  <a class="nav-item active" href="/calendar"><span class="nav-icon">📅</span>Calendar</a>
+  <a class="nav-item" href="/oura"><span class="nav-icon">💍</span>Oura</a>
+  <a class="nav-item" href="/health"><span class="nav-icon">🍎</span>Health</a>
+  <a class="nav-item" href="/admin"><span class="nav-icon">⚙️</span>Admin</a>
+</nav>
+
+<script>
+let view = 'month';
+let monthCursor = new Date(); monthCursor.setDate(1);
+let weekCursor = startOfWeek(new Date());
+
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function todayIso() { return isoDate(new Date()); }
+
+function startOfWeek(d) {
+  const x = new Date(d);
+  const day = x.getDay(); // 0=Sun
+  x.setDate(x.getDate() - day);
+  x.setHours(0,0,0,0);
+  return x;
+}
+
+function setView(v) {
+  view = v;
+  ['Month','Week','List'].forEach(name => {
+    document.getElementById('btn' + name).classList.toggle('active', name.toLowerCase() === v);
+  });
+  document.getElementById('navRow').style.display = v === 'list' ? 'none' : 'flex';
+  render();
+}
+document.getElementById('btnMonth').onclick = () => setView('month');
+document.getElementById('btnWeek').onclick = () => setView('week');
+document.getElementById('btnList').onclick = () => setView('list');
+
+document.getElementById('prevBtn').onclick = () => {
+  if (view === 'month') { monthCursor.setMonth(monthCursor.getMonth() - 1); }
+  else if (view === 'week') { weekCursor.setDate(weekCursor.getDate() - 7); }
+  render();
+};
+document.getElementById('nextBtn').onclick = () => {
+  if (view === 'month') { monthCursor.setMonth(monthCursor.getMonth() + 1); }
+  else if (view === 'week') { weekCursor.setDate(weekCursor.getDate() + 7); }
+  render();
+};
+
+function goToDay(dateStr) {
+  window.location.href = `/?date=${dateStr}`;
+}
+
+async function render() {
+  if (view === 'month') return renderMonth();
+  if (view === 'week') return renderWeek();
+  return renderList();
+}
+
+async function renderMonth() {
+  const monthStr = isoDate(monthCursor).slice(0,7);
+  document.getElementById('rangeLabel').textContent = monthCursor.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+
+  const res = await fetch(`/api/log/calendar?month=${monthStr}`);
+  const data = await res.json();
+  const byDate = {};
+  data.days.forEach(d => byDate[d.log_date] = d);
+
+  const avg = data.days.length
+    ? data.days.reduce((s, d) => s + (d.total_calories || 0), 0) / data.days.length
+    : 0;
+
+  const firstDay = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+  const daysInMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 0).getDate();
+  const leadingBlanks = firstDay.getDay();
+
+  let html = '<div class="weekday-row">' + ['S','M','T','W','T','F','S'].map(d => `<div>${d}</div>`).join('') + '</div>';
+  html += '<div class="month-grid">';
+  for (let i = 0; i < leadingBlanks; i++) html += '<div class="day-cell empty-cell"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${monthStr}-${String(day).padStart(2,'0')}`;
+    const info = byDate[dateStr];
+    let cls = 'day-cell';
+    if (dateStr === todayIso()) cls += ' today';
+    if (info && info.total_calories) {
+      cls += ' has-data';
+      const ratio = avg ? info.total_calories / avg : 1;
+      cls += ratio < 0.8 ? ' cal-low' : ratio > 1.2 ? ' cal-high' : ' cal-normal';
+    }
+    html += `<div class="${cls}" data-date="${dateStr}">
+      <div class="num">${day}</div>
+      ${info && info.total_calories ? `<div class="cals">${Math.round(info.total_calories)}</div>` : ''}
+    </div>`;
+  }
+  html += '</div>';
+
+  const el = document.getElementById('mainContent');
+  el.innerHTML = html;
+  el.querySelectorAll('.day-cell:not(.empty-cell)').forEach(c => c.onclick = () => goToDay(c.dataset.date));
+}
+
+async function renderWeek() {
+  const start = new Date(weekCursor);
+  const end = new Date(weekCursor); end.setDate(end.getDate() + 6);
+  document.getElementById('rangeLabel').textContent =
+    `${start.toLocaleDateString('en-AU', {day:'numeric', month:'short'})} – ${end.toLocaleDateString('en-AU', {day:'numeric', month:'short'})}`;
+
+  const res = await fetch(`/api/log/calendar?start=${isoDate(start)}&end=${isoDate(end)}`);
+  const data = await res.json();
+  const byDate = {};
+  data.days.forEach(d => byDate[d.log_date] = d);
+
+  let html = '<div class="week-strip">';
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start); d.setDate(d.getDate() + i);
+    const dateStr = isoDate(d);
+    const info = byDate[dateStr];
+    html += `<div class="week-day-card ${dateStr === todayIso() ? 'today' : ''}" data-date="${dateStr}">
+      <div class="week-day-left">
+        <div class="wd-name">${d.toLocaleDateString('en-AU', {weekday:'long'})}</div>
+        <div class="wd-date">${d.toLocaleDateString('en-AU', {day:'numeric', month:'short'})}</div>
+      </div>
+      <div class="week-day-right">
+        <div class="wd-cals">${info ? Math.round(info.total_calories || 0) + ' kcal' : '—'}</div>
+        <div class="wd-items">${info ? info.entries + ' item' + (info.entries !== 1 ? 's' : '') : 'No entries'}</div>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+
+  const el = document.getElementById('mainContent');
+  el.innerHTML = html;
+  el.querySelectorAll('.week-day-card').forEach(c => c.onclick = () => goToDay(c.dataset.date));
+}
+
+async function renderList() {
+  const res = await fetch('/api/log/history?days=60');
+  const rows = await res.json();
+  const el = document.getElementById('mainContent');
+
+  if (rows.length === 0) {
+    el.innerHTML = '<div class="empty-hint">No logged days yet</div>';
+    return;
+  }
+
+  el.innerHTML = '<div class="list-rows">' + rows.map(r => `
+    <div class="list-row" data-date="${r.log_date}">
+      <div>
+        <div class="lr-date">${new Date(r.log_date + 'T00:00:00').toLocaleDateString('en-AU', {weekday:'short', day:'numeric', month:'short'})}</div>
+        <div class="lr-meta">${r.entries} item${r.entries !== 1 ? 's' : ''}</div>
+      </div>
+      <div class="lr-cals">${Math.round(r.total_calories || 0)} kcal</div>
+    </div>
+  `).join('') + '</div>';
+
+  el.querySelectorAll('.list-row').forEach(c => c.onclick = () => goToDay(c.dataset.date));
+}
+
+render();
+
+// ── Theme toggle ──────────────────────────────────────────────────────────
+function currentTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr) return attr;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function applyThemeIcon() {
+  document.getElementById('themeToggle').textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+}
+document.getElementById('themeToggle').onclick = () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('nutrilog-theme', next);
+  applyThemeIcon();
+};
+applyThemeIcon();
+</script>
+</body>
+</html>

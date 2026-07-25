@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+nutrilog.db
+nutrilog.db-shm
+nutrilog.db-wal
+nutrilog.db.pre-multiuser-backup
+node_modules/
