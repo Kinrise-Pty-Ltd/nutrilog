@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>NutriLog · Health</title>
+<script>
+  (function() {
+    var saved = localStorage.getItem('nutrilog-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  })();
+</script>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface2: #f1f5f9;
+    --border: #e2e8f0;
+    --accent: #10b981;
+    --accent2: #6366f1;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --text: #0f172a;
+    --text-muted: #94a3b8;
+    --text-dim: #475569;
+    --radius: 14px;
+    --radius-sm: 8px;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3248;
+    --accent: #6ee7b7;
+    --accent2: #818cf8;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --text: #e2e8f0;
+    --text-muted: #64748b;
+    --text-dim: #94a3b8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3248;
+      --accent: #6ee7b7;
+      --accent2: #818cf8;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --text-dim: #94a3b8;
+    }
+  }
+  .theme-toggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; font-size: 0.95rem; cursor: pointer; flex-shrink: 0; }
+  .theme-toggle:active { background: var(--border); }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .logo { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: var(--accent); }
+
+  .main-content { padding: 16px; padding-bottom: 90px; }
+
+  .banner { background: var(--surface2); border: 1px dashed var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; font-size: 0.85rem; color: var(--text-dim); }
+  .banner strong { color: var(--text); }
+
+  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .stat-card .label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 1.6rem; font-weight: 800; }
+  .stat-card .unit { font-size: 0.8rem; color: var(--text-muted); font-weight: 400; }
+  .stat-card svg { width: 100%; height: 32px; margin-top: 8px; display: block; }
+
+  .setup-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
+  .setup-card h2 { font-size: 1rem; margin-bottom: 4px; }
+  .setup-card p { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 12px; }
+  .setup-card ol { font-size: 0.82rem; color: var(--text-dim); margin: 8px 0 14px 18px; }
+  .setup-card ol li { margin-bottom: 4px; }
+  .field-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .field-row input { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 0.8rem; font-family: monospace; }
+  .field-row button { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 0 14px; font-size: 0.8rem; cursor: pointer; }
+  .field-row button:active { background: var(--border); }
+  .btn-regen { background: none; border: none; color: var(--danger); font-size: 0.78rem; cursor: pointer; text-decoration: underline; }
+  .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--accent); color: var(--text); padding: 8px 18px; border-radius: 10px; font-size: 0.8rem; z-index: 999; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+
+  .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: flex; z-index: 100; }
+  .nav-item { flex: 1; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; text-decoration: none; color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .nav-item.active { color: var(--accent); }
+  .nav-icon { font-size: 1.2rem; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Nutri<span>Log</span></div>
+  <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
+</div>
+
+<div class="main-content" id="mainContent">Loading…</div>
+<div class="toast" id="toast">Copied</div>
+
+<nav class="bottom-nav">
+  <a class="nav-item" href="/"><span class="nav-icon">📋</span>Log</a>
+  <a class="nav-item" href="/calendar"><span class="nav-icon">📅</span>Calendar</a>
+  <a class="nav-item" href="/oura"><span class="nav-icon">💍</span>Oura</a>
+  <a class="nav-item active" href="/health"><span class="nav-icon">🍎</span>Health</a>
+  <a class="nav-item" href="/admin"><span class="nav-icon">⚙️</span>Admin</a>
+</nav>
+
+<script>
+function sparkline(values, color) {
+  const vals = values.filter(v => v !== null && v !== undefined);
+  if (vals.length === 0) return '';
+  const w = 300, h = 32;
+  const max = Math.max(...vals), min = Math.min(...vals);
+  const range = (max - min) || 1;
+  const points = vals.map((v, i) => {
+    const x = (i / (vals.length - 1 || 1)) * w;
+    const y = h - ((v - min) / range) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function avg(arr) {
+  const vals = arr.filter(v => v !== null && v !== undefined);
+  if (!vals.length) return null;
+  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1500);
+}
+
+async function loadHealth() {
+  const [tokenInfo, status, summary] = await Promise.all([
+    fetch('/api/health/token').then(r => r.json()),
+    fetch('/api/health/status').then(r => r.json()),
+    fetch('/api/health/summary?days=30').then(r => r.json()),
+  ]);
+
+  renderSetup(tokenInfo, status.connected);
+  renderStats(summary);
+}
+
+function renderSetup(tokenInfo, connected) {
+  const html = `
+    <div class="setup-card">
+      <h2>🍎 Bring in iPhone Health data</h2>
+      <p>${connected ? 'Connected — receiving data from your phone.' : 'Not connected yet — showing demo data below.'}
+      Apple doesn't offer a direct cloud link, so this uses a small automation on your phone to push data here on a schedule.</p>
+      <ol>
+        <li>On your iPhone, open the <strong>Shortcuts</strong> app and create a new Personal Automation (e.g. daily at 11pm).</li>
+        <li>Add "Get Health Sample" actions for Steps, Active Energy, Resting Energy, Exercise Minutes, Weight, Resting Heart Rate, Sleep.</li>
+        <li>Add "Get Contents of URL" — POST to the address below, header <code>Authorization: Bearer &lt;token&gt;</code>, JSON body with a <code>date</code> field plus the values.</li>
+        <li>(Alternative: the "Health Auto Export" App Store app can also POST to this same URL/token on a schedule.)</li>
+      </ol>
+      <div class="field-row">
+        <input readonly id="ingestUrl" value="${tokenInfo.ingest_url}">
+        <button id="copyUrl">Copy</button>
+      </div>
+      <div class="field-row">
+        <input readonly id="ingestToken" value="${tokenInfo.token}" type="password">
+        <button id="toggleToken">Show</button>
+        <button id="copyToken">Copy</button>
+      </div>
+      <button class="btn-regen" id="regenBtn">Regenerate token (invalidates the old one)</button>
+    </div>
+  `;
+  document.getElementById('mainContent').insertAdjacentHTML('beforeend', html);
+
+  document.getElementById('copyUrl').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('ingestUrl').value);
+    showToast('URL copied');
+  };
+  document.getElementById('copyToken').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('ingestToken').value);
+    showToast('Token copied');
+  };
+  document.getElementById('toggleToken').onclick = () => {
+    const input = document.getElementById('ingestToken');
+    input.type = input.type === 'password' ? 'text' : 'password';
+  };
+  document.getElementById('regenBtn').onclick = async () => {
+    if (!confirm('This invalidates the current token — any automation using it will need updating. Continue?')) return;
+    const res = await fetch('/api/health/token/regenerate', { method: 'POST' });
+    const data = await res.json();
+    document.getElementById('ingestToken').value = data.token;
+    showToast('New token generated');
+  };
+}
+
+function renderStats(summary) {
+  const days = summary.days;
+  const steps = days.map(d => d.steps);
+  const activeEnergy = days.map(d => d.active_energy_kcal);
+  const weight = days.map(d => d.weight_kg);
+  const sleep = days.map(d => d.sleep_minutes);
+
+  const html = `
+    ${summary.demo ? '<div class="banner"><strong>Demo data</strong> — set up the automation above to see your real stats.</div>' : ''}
+    <div class="card-grid">
+      <div class="stat-card">
+        <div class="label">Steps <span class="unit">avg/day</span></div>
+        <div class="value">${avg(steps) ?? '—'}</div>
+        ${sparkline(steps, 'var(--accent)')}
+      </div>
+      <div class="stat-card">
+        <div class="label">Active Energy <span class="unit">kcal</span></div>
+        <div class="value">${avg(activeEnergy) ?? '—'}</div>
+        ${sparkline(activeEnergy, 'var(--warn)')}
+      </div>
+      <div class="stat-card">
+        <div class="label">Weight <span class="unit">kg</span></div>
+        <div class="value">${avg(weight) ?? '—'}</div>
+        ${sparkline(weight, 'var(--accent2)')}
+      </div>
+      <div class="stat-card">
+        <div class="label">Sleep <span class="unit">hrs/night</span></div>
+        <div class="value">${avg(sleep) !== null ? (avg(sleep) / 60).toFixed(1) : '—'}</div>
+        ${sparkline(sleep, 'var(--danger)')}
+      </div>
+    </div>
+  `;
+  document.getElementById('mainContent').insertAdjacentHTML('beforeend', html);
+}
+
+document.getElementById('mainContent').textContent = '';
+loadHealth();
+
+// ── Theme toggle ──────────────────────────────────────────────────────────
+function currentTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr) return attr;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function applyThemeIcon() {
+  document.getElementById('themeToggle').textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+}
+document.getElementById('themeToggle').onclick = () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('nutrilog-theme', next);
+  applyThemeIcon();
+};
+applyThemeIcon();
+</script>
+</body>
+</html>

@@ -4,8 +4,29 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>NutriLog</title>
+<script>
+  (function() {
+    var saved = localStorage.getItem('nutrilog-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  })();
+</script>
 <style>
   :root {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface2: #f1f5f9;
+    --border: #e2e8f0;
+    --accent: #10b981;
+    --accent2: #6366f1;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --text: #0f172a;
+    --text-muted: #94a3b8;
+    --text-dim: #475569;
+    --radius: 14px;
+    --radius-sm: 8px;
+  }
+  :root[data-theme="dark"] {
     --bg: #0f1117;
     --surface: #1a1d27;
     --surface2: #22263a;
@@ -17,9 +38,24 @@
     --text: #e2e8f0;
     --text-muted: #64748b;
     --text-dim: #94a3b8;
-    --radius: 14px;
-    --radius-sm: 8px;
   }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3248;
+      --accent: #6ee7b7;
+      --accent2: #818cf8;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --text-dim: #94a3b8;
+    }
+  }
+  .theme-toggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; font-size: 0.95rem; cursor: pointer; flex-shrink: 0; }
+  .theme-toggle:active { background: var(--border); }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
 
@@ -94,6 +130,12 @@
   .food-option-left .food-name { font-size: 0.9rem; font-weight: 600; }
   .food-option-left .food-serving { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
   .food-option-right { font-size: 0.9rem; font-weight: 700; color: var(--accent); }
+  .food-option.suggested { border-color: var(--accent); }
+
+  .scan-btn { flex-shrink: 0; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 10px; width: 44px; font-size: 1.2rem; cursor: pointer; }
+  .scan-btn:active { background: var(--border); }
+  .scan-status { margin-top: 10px; font-size: 0.8rem; color: var(--text-dim); background: var(--surface2); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .scan-status .caption { font-style: italic; }
 
   /* QTY modal */
   .qty-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: none; align-items: center; justify-content: center; padding: 20px; }
@@ -131,6 +173,7 @@
     <button id="prevDay">‹</button>
     <div class="date-label" id="dateLabel">Today</div>
     <button id="nextDay">›</button>
+    <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
   </div>
 </div>
 
@@ -156,6 +199,15 @@
   <a class="nav-item active" href="/">
     <span class="nav-icon">📋</span>Log
   </a>
+  <a class="nav-item" href="/calendar">
+    <span class="nav-icon">📅</span>Calendar
+  </a>
+  <a class="nav-item" href="/oura">
+    <span class="nav-icon">💍</span>Oura
+  </a>
+  <a class="nav-item" href="/health">
+    <span class="nav-icon">🍎</span>Health
+  </a>
   <a class="nav-item" href="/admin">
     <span class="nav-icon">⚙️</span>Admin
   </a>
@@ -170,7 +222,12 @@
       <button class="modal-close" id="closeModal">×</button>
     </div>
     <div class="search-box">
-      <input class="search-input" id="searchInput" type="text" placeholder="Search foods…" autocomplete="off">
+      <div style="display:flex;gap:8px;">
+        <input class="search-input" id="searchInput" type="text" placeholder="Search foods…" autocomplete="off" style="flex:1;">
+        <button class="scan-btn" id="scanBtn" type="button" title="Scan a photo">📷</button>
+      </div>
+      <input type="file" id="scanFileInput" accept="image/*" capture="environment" style="display:none;">
+      <div id="scanStatus" class="scan-status" style="display:none;"></div>
     </div>
     <div class="food-list" id="foodList"></div>
   </div>
@@ -204,7 +261,7 @@ let allFoods = [];
 let openSlots = new Set();
 
 function isoDate(d) {
-  return d.toISOString().split('T')[0];
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function formatDate(d) {
@@ -218,6 +275,27 @@ function formatDate(d) {
 
 document.getElementById('prevDay').onclick = () => { currentDate.setDate(currentDate.getDate()-1); refresh(); };
 document.getElementById('nextDay').onclick = () => { currentDate.setDate(currentDate.getDate()+1); refresh(); };
+
+// ── Theme toggle ──────────────────────────────────────────────────────────
+function currentTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr) return attr;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function applyThemeIcon() {
+  document.getElementById('themeToggle').textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+}
+document.getElementById('themeToggle').onclick = () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('nutrilog-theme', next);
+  applyThemeIcon();
+};
+applyThemeIcon();
+
+// ── Preselect date from ?date= (deep-link from calendar) ────────────────────
+const urlDate = new URLSearchParams(window.location.search).get('date');
+if (urlDate) currentDate = new Date(urlDate + 'T00:00:00');
 
 async function loadData() {
   const [catsRes, foodsRes, logRes, summaryRes] = await Promise.all([
@@ -311,6 +389,7 @@ function openFoodModal(slotId, slotName) {
   currentSlot = slotId;
   document.getElementById('modalTitle').textContent = `Add to ${slotName}`;
   document.getElementById('searchInput').value = '';
+  document.getElementById('scanStatus').style.display = 'none';
   document.getElementById('foodModal').classList.add('open');
   renderFoodList('');
   setTimeout(() => document.getElementById('searchInput').focus(), 100);
@@ -359,6 +438,64 @@ function renderFoodList(query) {
 
 document.getElementById('searchInput').addEventListener('input', e => renderFoodList(e.target.value));
 document.getElementById('closeModal').onclick = () => document.getElementById('foodModal').classList.remove('open');
+
+// ── Camera food recognition ──────────────────────────────────────────────
+fetch('/api/food-recognition/status').then(r => r.json()).then(s => {
+  if (!s.configured) document.getElementById('scanBtn').style.display = 'none';
+}).catch(() => { document.getElementById('scanBtn').style.display = 'none'; });
+
+document.getElementById('scanBtn').onclick = () => document.getElementById('scanFileInput').click();
+
+document.getElementById('scanFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('scanStatus');
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Analysing photo…';
+
+  const form = new FormData();
+  form.append('photo', file);
+  try {
+    const url = currentSlot ? `/api/food-recognition?category_id=${currentSlot}` : '/api/food-recognition';
+    const res = await fetch(url, { method: 'POST', body: form });
+    if (!res.ok) throw new Error((await res.json()).error || 'Recognition failed');
+    const result = await res.json();
+    renderScanResult(result);
+  } catch (err) {
+    statusEl.innerHTML = `Couldn't recognise that photo — try searching instead.`;
+  }
+  e.target.value = '';
+});
+
+function renderScanResult(result) {
+  const statusEl = document.getElementById('scanStatus');
+  statusEl.innerHTML = result.caption
+    ? `We saw: <span class="caption">"${result.caption}"</span>`
+    : `No strong match — try searching instead.`;
+
+  const list = document.getElementById('foodList');
+  if (result.suggestions.length === 0) return;
+
+  const html = `
+    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;padding:8px 4px 4px">Did you mean…</div>
+    ${result.suggestions.map(f => `
+      <div class="food-option suggested" data-id="${f.id}">
+        <div class="food-option-left">
+          <div class="food-name">${f.name}</div>
+          <div class="food-serving">${f.serving_size}${f.serving_unit}</div>
+        </div>
+        <div class="food-option-right">${f.calories} kcal</div>
+      </div>
+    `).join('')}
+  `;
+  list.insertAdjacentHTML('afterbegin', html);
+  list.querySelectorAll('.food-option.suggested').forEach(el => {
+    el.addEventListener('click', () => {
+      const food = result.suggestions.find(f => f.id === el.dataset.id);
+      openQtyModal(food);
+    });
+  });
+}
 document.getElementById('foodModal').addEventListener('click', e => {
   if (e.target === document.getElementById('foodModal')) document.getElementById('foodModal').classList.remove('open');
 });

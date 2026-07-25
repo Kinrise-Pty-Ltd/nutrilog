@@ -1,0 +1,61 @@
+"""Azure AI Vision food-photo recognition: caption + tags, fuzzy-matched
+against the existing food_items catalog. This is a suggestion aid, not an
+auto-logger — Azure AI Vision isn't food-specialized, so results are shown
+to the user to confirm/pick from, same as a manual search would be.
+"""
+import difflib
+import os
+
+import requests
+
+VISION_ENDPOINT = os.environ.get('AZURE_VISION_ENDPOINT', '').rstrip('/')
+VISION_KEY = os.environ.get('AZURE_VISION_KEY')
+VISION_API_VERSION = os.environ.get('AZURE_VISION_API_VERSION', '2024-02-01')
+
+
+def is_configured():
+    return bool(VISION_ENDPOINT and VISION_KEY)
+
+
+def analyze_image(image_bytes):
+    """Returns {'caption': str, 'tags': [str]} from Azure AI Vision Image Analysis."""
+    url = f'{VISION_ENDPOINT}/computervision/imageanalysis:analyze'
+    params = {'api-version': VISION_API_VERSION, 'features': 'caption,tags'}
+    headers = {
+        'Ocp-Apim-Subscription-Key': VISION_KEY,
+        'Content-Type': 'application/octet-stream',
+    }
+    resp = requests.post(url, params=params, headers=headers, data=image_bytes, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    caption = (data.get('captionResult') or {}).get('text', '')
+    tags = [
+        t['name'] for t in (data.get('tagsResult') or {}).get('values', [])
+        if t.get('confidence', 0) > 0.5
+    ]
+    return {'caption': caption, 'tags': tags}
+
+
+def _normalize(text):
+    return set(text.lower().replace('(', ' ').replace(')', ' ').replace('/', ' ').split())
+
+
+def match_foods(caption, tags, food_items, limit=5):
+    """Ranks food_items (list of dicts with 'name') against the recognized caption/tags."""
+    search_terms = [caption] + list(tags)
+    scored = []
+    for item in food_items:
+        name_words = _normalize(item['name'])
+        best = 0.0
+        for term in search_terms:
+            if not term:
+                continue
+            ratio = difflib.SequenceMatcher(None, term.lower(), item['name'].lower()).ratio()
+            overlap = len(_normalize(term) & name_words)
+            if overlap:
+                ratio = max(ratio, 0.5 + 0.15 * overlap)
+            best = max(best, ratio)
+        if best > 0.3:
+            scored.append((best, item))
+    scored.sort(key=lambda pair: -pair[0])
+    return [item for _, item in scored[:limit]]
