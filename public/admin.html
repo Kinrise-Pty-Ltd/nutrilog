@@ -159,8 +159,10 @@
   .integration-card .ic-left { display: flex; align-items: center; gap: 12px; }
   .integration-card .ic-icon { font-size: 1.6rem; }
   .integration-card .ic-name { font-weight: 700; font-size: 0.9rem; }
-  .integration-card .ic-status { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+  .integration-card .ic-status { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; max-width: 480px; line-height: 1.5; }
   .integration-card .ic-status.connected { color: var(--accent); }
+  .integration-card .ic-status a { color: var(--accent2); }
+  .integration-card .ic-status code { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 0.72rem; }
   .btn-oura-connect { background: var(--accent); color: #0f1117; border: none; border-radius: 8px; padding: 9px 16px; font-size: 0.85rem; font-weight: 700; cursor: pointer; }
   .btn-oura-connect:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-oura-disconnect { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 8px; padding: 9px 16px; font-size: 0.85rem; cursor: pointer; }
@@ -626,8 +628,11 @@ async function loadOuraIntegration() {
     actionEl.innerHTML = '<button class="btn-oura-connect" id="ouraConnectBtn">Connect to Oura</button>';
     document.getElementById('ouraConnectBtn').onclick = () => window.location.href = '/api/oura/authorize';
   } else {
-    statusEl.textContent = 'Not configured yet — showing demo data on the Oura page';
-    actionEl.innerHTML = '<button class="btn-oura-connect" disabled>Connect to Oura</button>';
+    statusEl.innerHTML = 'Not set up yet — showing demo data on the Oura page. Needs an OAuth app registered at ' +
+      '<a href="https://cloud.ouraring.com" target="_blank" rel="noopener">cloud.ouraring.com</a> ' +
+      '("My Applications", redirect URI <code>' + window.location.origin + '/api/oura/callback</code>), ' +
+      'then its client ID/secret added as app settings.';
+    actionEl.innerHTML = '<button class="btn-oura-connect" disabled title="Not configured yet">Connect to Oura</button>';
   }
 }
 
