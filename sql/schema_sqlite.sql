@@ -107,7 +107,6 @@ CREATE TABLE IF NOT EXISTS iphone_health_daily (
     UNIQUE (user_id, date)
 );
 
-CREATE INDEX IF NOT EXISTS idx_food_items_barcode ON food_items(barcode);
 CREATE INDEX IF NOT EXISTS idx_food_log_user_date ON food_log(user_id, log_date);
 CREATE INDEX IF NOT EXISTS idx_oura_daily_user_date ON oura_daily(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_iphone_health_user_date ON iphone_health_daily(user_id, date);

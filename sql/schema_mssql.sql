@@ -123,10 +123,6 @@ CREATE TABLE dbo.iphone_health_daily (
 );
 GO
 
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_food_items_barcode')
-CREATE INDEX idx_food_items_barcode ON dbo.food_items(barcode);
-GO
-
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_food_log_user_date')
 CREATE INDEX idx_food_log_user_date ON dbo.food_log(user_id, log_date);
 GO

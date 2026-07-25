@@ -81,6 +81,7 @@ def init_db():
 
     _migrate_columns('oura_daily', OURA_DAILY_NEW_COLUMNS)
     _migrate_columns('food_items', FOOD_ITEMS_NEW_COLUMNS)
+    _ensure_index('idx_food_items_barcode', 'food_items', 'barcode')
     _seed_defaults()
 
 
@@ -122,6 +123,20 @@ def _migrate_columns(table, columns):
             db.execute(f"ALTER TABLE {table} ADD {col} {col_type} NULL"
                        if BACKEND == 'mssql' else
                        f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+
+
+def _ensure_index(name, table, column):
+    """Must run after _migrate_columns for that table/column — creating an
+    index on a column before it exists (e.g. via the schema_*.sql script,
+    which runs before any migration on a database where the table already
+    existed) fails outright rather than being a harmless no-op."""
+    with get_db() as db:
+        if BACKEND == 'mssql':
+            exists = db.query_one("SELECT 1 AS x FROM sys.indexes WHERE name=?", (name,))
+        else:
+            exists = db.query_one("SELECT 1 AS x FROM sqlite_master WHERE type='index' AND name=?", (name,))
+        if not exists:
+            db.execute(f"CREATE INDEX {name} ON {table}({column})")
 
 
 def _seed_defaults():
