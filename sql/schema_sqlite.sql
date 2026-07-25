@@ -6,16 +6,24 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- categories/food_items are per-user (each user gets their own catalog,
+-- seeded with the same starter set on account creation) — see
+-- db.py's _migrate_catalog_to_per_user() for how existing shared-catalog
+-- installs get split, and CLAUDE.md for why `name` isn't UNIQUE here
+-- (two users both having a "Breakfast" category is expected).
 CREATE TABLE IF NOT EXISTS categories (
     id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
     icon TEXT DEFAULT '🍽️',
     sort_order INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS food_items (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
     category_id TEXT NOT NULL,
     name TEXT NOT NULL,
     serving_size TEXT NOT NULL,
@@ -27,7 +35,8 @@ CREATE TABLE IF NOT EXISTS food_items (
     notes TEXT,
     barcode TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (category_id) REFERENCES categories(id)
+    FOREIGN KEY (category_id) REFERENCES categories(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS food_log (
@@ -107,6 +116,27 @@ CREATE TABLE IF NOT EXISTS iphone_health_daily (
     UNIQUE (user_id, date)
 );
 
+-- Self-service delegation: an owner grants their own account's data/config
+-- access to another Entra-assigned user by email (matched at act-as time,
+-- not at grant time, so it works even before the delegate has ever signed
+-- in). See app.py's /api/delegates* and /api/act-as routes.
+CREATE TABLE IF NOT EXISTS user_delegates (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    delegate_email TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (owner_user_id) REFERENCES users(id),
+    UNIQUE (owner_user_id, delegate_email)
+);
+
 CREATE INDEX IF NOT EXISTS idx_food_log_user_date ON food_log(user_id, log_date);
 CREATE INDEX IF NOT EXISTS idx_oura_daily_user_date ON oura_daily(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_iphone_health_user_date ON iphone_health_daily(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_user_delegates_email ON user_delegates(delegate_email);
+
+-- idx_categories_user / idx_food_items_user are NOT declared here on purpose:
+-- user_id is a new column on tables that already exist in production, so
+-- (per CLAUDE.md) their index must be created via _ensure_index() in db.py
+-- *after* the column migration runs, not as a raw CREATE INDEX here — this
+-- script runs unconditionally before that migration on any database where
+-- categories/food_items predate this change.

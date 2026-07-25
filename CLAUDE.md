@@ -40,6 +40,17 @@ current status, see [HANDOVER.md](HANDOVER.md).
    starting a fresh test run if you get unexplained stale behavior (e.g. a
    config change not taking effect).
 
+5. **SQLite table rebuilds need `PRAGMA foreign_keys=OFF` as the very first
+   statement on that connection.** SQLite can't drop an inline `UNIQUE`
+   constraint or add a `NOT NULL` column via `ALTER TABLE` — the only option
+   is rename-old / create-new / copy-rows / drop-old. Renaming a table
+   updates *other* tables' foreign keys to point at the new (renamed) name,
+   which then blocks dropping that renamed table while a not-yet-rebuilt
+   table still references it — see `_migrate_catalog_to_per_user()` in
+   `db.py` for a worked example (categories/food_items). The pragma has no
+   effect once a transaction is already open, so it must be the first thing
+   executed on a fresh `get_db()` connection, before any other statement.
+
 ## Architecture
 
 - **No build step.** Every `public/*.html` file is a fully self-contained
@@ -57,10 +68,27 @@ current status, see [HANDOVER.md](HANDOVER.md).
 - **Auth**: production sits behind Azure App Service Easy Auth (Entra ID),
   which injects `X-MS-CLIENT-PRINCIPAL-*` headers on every request.
   `auth.py`'s `load_current_user()` reads those, resolving/auto-provisioning
-  a `users` row. Locally (no Easy Auth in front of the dev server), it falls
-  back to a single `DEV_USER_EMAIL`. The `food_log`, Oura, and Health tables
-  are scoped per-user; `categories`/`food_items` (the food catalog) are
-  intentionally global/shared, managed centrally via Admin.
+  a `users` row (and seeding that new user's own starter catalog via
+  `db.seed_user_catalog()`). Locally (no Easy Auth in front of the dev
+  server), it falls back to a single `DEV_USER_EMAIL`. `food_log`, Oura,
+  Health, **and now `categories`/`food_items`** are all scoped per-user —
+  every user gets their own private catalog, not a shared one (this changed
+  July 2026; see `db.py`'s `_migrate_catalog_to_per_user()` for how the
+  previously-shared catalog was split without losing anyone's data).
+- **Delegated access ("act as")**: `attach_user()` in `app.py` sets
+  `g.real_user` (the actual signed-in identity) and `g.user` (the *effective*
+  identity every route scopes data by — normally the same as `g.real_user`,
+  but swapped to another user's row if `session['acting_as']` is set *and*
+  that owner still has a live grant for `g.real_user`'s email in
+  `user_delegates`, re-checked on every request so a revoke takes effect
+  immediately). This is why every other route only ever needs to read
+  `g.user['id']` — delegation is handled once, centrally, not per-route.
+  Grants are self-service (`/api/delegates*`, managed from Admin's
+  "Delegate Access" section) and matched by email, not a foreign key to a
+  `users` row, so an owner can grant access to someone who hasn't signed in
+  yet. `/api/me` exposes both identities plus an `acting_as` boolean for the
+  frontend's account-switcher UI (duplicated across all five pages, like
+  the theme toggle).
 - **The `/api/health/ingest` and `/api/mcp` routes are the two exceptions**
   to "every route sits behind the same auth": `health/ingest` is called by
   an unattended device automation (not a browser), authenticated by its own

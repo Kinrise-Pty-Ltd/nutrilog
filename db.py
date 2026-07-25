@@ -9,6 +9,7 @@ sqlite3 both accept this), so almost all query code is backend-agnostic.
 """
 import os
 import sqlite3
+import uuid
 
 BACKEND = 'mssql' if os.environ.get('AZURE_SQL_CONNECTION_STRING') else 'sqlite'
 
@@ -82,7 +83,9 @@ def init_db():
     _migrate_columns('oura_daily', OURA_DAILY_NEW_COLUMNS)
     _migrate_columns('food_items', FOOD_ITEMS_NEW_COLUMNS)
     _ensure_index('idx_food_items_barcode', 'food_items', 'barcode')
-    _seed_defaults()
+    _migrate_catalog_to_per_user()
+    _ensure_index('idx_categories_user', 'categories', 'user_id')
+    _ensure_index('idx_food_items_user', 'food_items', 'user_id')
 
 
 # Columns added after the initial oura_daily CREATE TABLE shipped. New
@@ -139,10 +142,134 @@ def _ensure_index(name, table, column):
             db.execute(f"CREATE INDEX {name} ON {table}({column})")
 
 
-def _seed_defaults():
-    import uuid
+def _migrate_catalog_to_per_user():
+    """One-time structural migration: categories/food_items used to be one
+    global, shared catalog (no user_id, and categories.name was globally
+    UNIQUE). Splitting it per-user means (a) adding user_id, (b) dropping
+    that UNIQUE(name) constraint (two users both having "Breakfast" is
+    normal), and (c) cloning the existing shared rows into a private copy
+    per existing user, remapping each user's own food_log rows to point at
+    their clone rather than the shared originals. Idempotent: no-ops if
+    categories already has a user_id column (true for both a fresh install,
+    whose schema already includes it, and a database this has already run
+    against once)."""
     with get_db() as db:
-        existing = db.query_one("SELECT COUNT(*) AS n FROM categories")['n']
+        if BACKEND == 'mssql':
+            has_user_id = db.query_one(
+                "SELECT 1 AS x FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='categories' AND COLUMN_NAME='user_id'"
+            )
+        else:
+            has_user_id = 'user_id' in {r['name'].lower() for r in db.query("PRAGMA table_info(categories)")}
+        if has_user_id:
+            return
+
+    with get_db() as db:
+        if BACKEND == 'mssql':
+            db.execute("""
+                DECLARE @c NVARCHAR(256);
+                SELECT @c = kc.name FROM sys.key_constraints kc
+                JOIN sys.tables t ON kc.parent_object_id = t.object_id
+                WHERE t.name = 'categories' AND kc.type = 'UQ';
+                IF @c IS NOT NULL EXEC('ALTER TABLE dbo.categories DROP CONSTRAINT ' + @c);
+            """)
+            db.execute("ALTER TABLE dbo.categories ADD user_id NVARCHAR(64) NULL")
+            db.execute("ALTER TABLE dbo.food_items ADD user_id NVARCHAR(64) NULL")
+        else:
+            # SQLite can't drop an inline UNIQUE constraint or add a NOT NULL
+            # column with no default via ALTER TABLE — rebuild both tables.
+            # FK checks must be off for this: renaming categories updates
+            # food_items' foreign key to point at categories_legacy, which
+            # then blocks dropping categories_legacy while food_items (not
+            # yet rebuilt itself) still references it. Must be the first
+            # statement on this connection — SQLite ignores the pragma once
+            # a transaction is already open.
+            db.execute("PRAGMA foreign_keys=OFF")
+            db.execute("ALTER TABLE categories RENAME TO categories_legacy")
+            db.execute("""CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                name TEXT NOT NULL,
+                icon TEXT DEFAULT '🍽️',
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""")
+            db.execute("""INSERT INTO categories (id, user_id, name, icon, sort_order, created_at)
+                SELECT id, NULL, name, icon, sort_order, created_at FROM categories_legacy""")
+            db.execute("DROP TABLE categories_legacy")
+
+            db.execute("ALTER TABLE food_items RENAME TO food_items_legacy")
+            db.execute("""CREATE TABLE food_items (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                category_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                serving_size TEXT NOT NULL,
+                serving_unit TEXT DEFAULT 'g',
+                calories INTEGER NOT NULL,
+                protein_g REAL DEFAULT 0,
+                carbs_g REAL DEFAULT 0,
+                fat_g REAL DEFAULT 0,
+                notes TEXT,
+                barcode TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (category_id) REFERENCES categories(id)
+            )""")
+            db.execute("""INSERT INTO food_items (id, user_id, category_id, name, serving_size, serving_unit,
+                calories, protein_g, carbs_g, fat_g, notes, barcode, created_at)
+                SELECT id, NULL, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g,
+                       fat_g, notes, barcode, created_at FROM food_items_legacy""")
+            db.execute("DROP TABLE food_items_legacy")
+
+    with get_db() as db:
+        legacy_categories = db.query("SELECT * FROM categories WHERE user_id IS NULL")
+        legacy_food_items = db.query("SELECT * FROM food_items WHERE user_id IS NULL")
+        users = db.query("SELECT id FROM users")
+
+        for user in users:
+            uid = user['id']
+            cat_id_map = {}
+            for cat in legacy_categories:
+                new_id = str(uuid.uuid4())
+                cat_id_map[cat['id']] = new_id
+                db.execute(
+                    "INSERT INTO categories (id, user_id, name, icon, sort_order, created_at) VALUES (?,?,?,?,?,?)",
+                    (new_id, uid, cat['name'], cat['icon'], cat['sort_order'], cat['created_at'])
+                )
+
+            item_id_map = {}
+            for item in legacy_food_items:
+                new_cat_id = cat_id_map.get(item['category_id'])
+                if not new_cat_id:
+                    continue  # orphaned item with no matching category — nothing sane to clone it under
+                new_id = str(uuid.uuid4())
+                item_id_map[item['id']] = new_id
+                db.execute(
+                    """INSERT INTO food_items (id, user_id, category_id, name, serving_size, serving_unit,
+                       calories, protein_g, carbs_g, fat_g, notes, barcode, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (new_id, uid, new_cat_id, item['name'], item['serving_size'], item['serving_unit'],
+                     item['calories'], item['protein_g'], item['carbs_g'], item['fat_g'], item['notes'],
+                     item['barcode'], item['created_at'])
+                )
+
+            # Point this user's own log history at their new private clones —
+            # the shared originals stay behind (user_id IS NULL) rather than
+            # being deleted; every catalog query filters by user_id, so they
+            # simply stop being visible instead of risking a destructive DELETE.
+            for old_item_id, new_item_id in item_id_map.items():
+                db.execute(
+                    "UPDATE food_log SET food_item_id=? WHERE user_id=? AND food_item_id=?",
+                    (new_item_id, uid, old_item_id)
+                )
+
+
+def seed_user_catalog(user_id):
+    """Gives a newly-created user their own starter catalog (same defaults
+    every user has historically started with). Called from auth.py right
+    after a new users row is inserted — not from init_db(), since the
+    catalog is per-user now, not a one-time global seed."""
+    with get_db() as db:
+        existing = db.query_one("SELECT COUNT(*) AS n FROM categories WHERE user_id=?", (user_id,))['n']
         if existing:
             return
 
@@ -157,8 +284,8 @@ def _seed_defaults():
         ]
         for cat_id, name, icon, order in defaults:
             db.execute(
-                "INSERT INTO categories (id, name, icon, sort_order) VALUES (?,?,?,?)",
-                (cat_id, name, icon, order)
+                "INSERT INTO categories (id, user_id, name, icon, sort_order) VALUES (?,?,?,?,?)",
+                (cat_id, user_id, name, icon, order)
             )
 
         cat_map = {name: cat_id for cat_id, name, icon, order in defaults}
@@ -203,7 +330,7 @@ def _seed_defaults():
         for cat_id, name, size, unit, cals, p, c, f in starter_items:
             db.execute(
                 """INSERT INTO food_items
-                   (id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (str(uuid.uuid4()), cat_id, name, size, unit, cals, p, c, f)
+                   (id, user_id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), user_id, cat_id, name, size, unit, cals, p, c, f)
             )

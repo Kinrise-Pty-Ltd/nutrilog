@@ -10,7 +10,7 @@ import uuid
 
 from flask import request
 
-from db import get_db
+from db import get_db, seed_user_catalog
 
 DEV_USER_EMAIL = os.environ.get('DEV_USER_EMAIL', 'dev@localhost')
 DEV_USER_NAME = os.environ.get('DEV_USER_NAME', 'Dev User')
@@ -41,11 +41,15 @@ def load_current_user():
             if user and oid and not user.get('entra_oid'):
                 db.execute("UPDATE users SET entra_oid=? WHERE id=?", (oid, user['id']))
                 user['entra_oid'] = oid
-        if not user:
+        is_new = not user
+        if is_new:
             new_id = str(uuid.uuid4())
             db.execute(
                 "INSERT INTO users (id, entra_oid, email, display_name) VALUES (?,?,?,?)",
                 (new_id, oid, email, display_name)
             )
             user = db.query_one("SELECT * FROM users WHERE id=?", (new_id,))
-        return user
+
+    if is_new:
+        seed_user_catalog(user['id'])  # own connection — outside the `with` above
+    return user

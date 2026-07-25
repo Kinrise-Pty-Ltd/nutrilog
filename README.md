@@ -24,10 +24,16 @@ For infrastructure details, credentials map, and current project status, see
 - **iPhone Health** (`/health`) — steps, active energy, weight, sleep, via a
   Shortcuts automation or the Health Auto Export app pushing to a bearer-token
   ingest endpoint; shows demo data until connected
-- **Admin** (`/admin`) — manage the shared food catalog, and the
-  Oura/Health/MCP integrations
-- **Multi-user** — each signed-in user has their own log; the food catalog
-  is shared/global, managed centrally in Admin
+- **Admin** (`/admin`) — manage your own food catalog, integrations, and who
+  has delegate access to your account
+- **Multi-user** — each signed-in user has their own private log *and*
+  catalog (new users get seeded with the same starter set Ruffy originally
+  had, editable independently thereafter)
+- **Delegate access** — grant someone else (e.g. an assistant) full access
+  to your own account's data and config; they get an account switcher after
+  signing in with their own KinGroup account. Self-service, managed from
+  Admin's "Delegate Access" section. See `app.py`'s `/api/delegates*` and
+  `/api/act-as` routes.
 - **MCP server** (`/api/mcp`) — exposes a user's data to MCP clients (e.g. a
   Copilot Studio agent) as read-only tools
 - Light/dark theme toggle
