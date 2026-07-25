@@ -5,6 +5,7 @@ from flask import Flask, g, jsonify, request, send_from_directory
 
 import barcode
 import health
+import mcp_server
 import oura
 import vision
 from auth import load_current_user
@@ -547,6 +548,30 @@ def health_ingest():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ingested': count})
+
+
+# ── MCP SERVER (for Copilot Studio / other MCP clients) ───────────────────────
+
+@app.route('/api/mcp', methods=['POST'])
+def mcp_endpoint():
+    """Streamable HTTP transport, single-JSON-response mode (no SSE — every
+    tool here is a quick synchronous lookup). Scoped to g.user via the same
+    before_request auth as every other /api/* route."""
+    message = request.get_json(silent=True)
+    if message is None:
+        return jsonify(mcp_server._error(None, -32700, 'Parse error')), 400
+
+    response, status = mcp_server.handle_message(g.user['id'], message)
+    if response is None:
+        return '', status
+    return jsonify(response), status
+
+
+@app.route('/api/mcp', methods=['GET'])
+def mcp_endpoint_get():
+    # Streamable HTTP transport allows an optional GET for server-initiated
+    # SSE messages — not implemented here, every tool is request/response only.
+    return jsonify({'error': 'This MCP server only supports POST (no server-initiated streaming)'}), 405
 
 
 if __name__ == '__main__':
