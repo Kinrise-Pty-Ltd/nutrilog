@@ -152,8 +152,27 @@ def _migrate_catalog_to_per_user():
     their clone rather than the shared originals. Idempotent: no-ops if
     categories already has a user_id column (true for both a fresh install,
     whose schema already includes it, and a database this has already run
-    against once)."""
+    against once).
+
+    Guarded by an sp_getapplock (mssql) so two gunicorn worker processes
+    starting at the same moment can't both observe "not migrated yet"
+    and both clone the catalog — this previously happened in production
+    and duplicated every user's categories/food_items (fixed here; see
+    the one-off cleanup this fix shipped alongside)."""
     with get_db() as db:
+        if BACKEND == 'mssql':
+            # Exclusive, session-scoped: blocks a second worker here until
+            # the first one's migration (below) has committed and this
+            # connection closes, at which point the lock auto-releases.
+            lock = db.query_one(
+                "DECLARE @r INT; "
+                "EXEC @r = sp_getapplock @Resource='nutrilog_catalog_per_user_migration', "
+                "@LockMode='Exclusive', @LockOwner='Session', @LockTimeout=60000; "
+                "SELECT @r AS result"
+            )
+            if not lock or lock['result'] < 0:
+                raise RuntimeError('Could not acquire catalog-migration lock (sp_getapplock)')
+
         if BACKEND == 'mssql':
             has_user_id = db.query_one(
                 "SELECT 1 AS x FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='categories' AND COLUMN_NAME='user_id'"
@@ -161,9 +180,8 @@ def _migrate_catalog_to_per_user():
         else:
             has_user_id = 'user_id' in {r['name'].lower() for r in db.query("PRAGMA table_info(categories)")}
         if has_user_id:
-            return
+            return  # already migrated — lock (if held) releases when this connection closes
 
-    with get_db() as db:
         if BACKEND == 'mssql':
             db.execute("""
                 DECLARE @c NVARCHAR(256);
@@ -220,7 +238,6 @@ def _migrate_catalog_to_per_user():
                        fat_g, notes, barcode, created_at FROM food_items_legacy""")
             db.execute("DROP TABLE food_items_legacy")
 
-    with get_db() as db:
         legacy_categories = db.query("SELECT * FROM categories WHERE user_id IS NULL")
         legacy_food_items = db.query("SELECT * FROM food_items WHERE user_id IS NULL")
         users = db.query("SELECT id FROM users")
