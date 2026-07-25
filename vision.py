@@ -1,7 +1,14 @@
-"""Azure AI Vision food-photo recognition: caption + tags, fuzzy-matched
-against the existing food_items catalog. This is a suggestion aid, not an
-auto-logger — Azure AI Vision isn't food-specialized, so results are shown
-to the user to confirm/pick from, same as a manual search would be.
+"""Azure AI Vision food-photo recognition: tags (+ caption where available),
+fuzzy-matched against the existing food_items catalog. This is a suggestion
+aid, not an auto-logger — Azure AI Vision isn't food-specialized, so results
+are shown to the user to confirm/pick from, same as a manual search would be.
+
+Note: the 'caption' feature (Image Analysis 4.0) only runs in a handful of
+GPU-backed regions and is NOT available in australiaeast, where nutrilog's
+Vision resource lives — requesting it there fails the whole call with a 400.
+Defaulting to 'tags' only, which is available everywhere. Override via
+AZURE_VISION_FEATURES if the resource is ever moved/replaced with one in a
+supported region.
 """
 import difflib
 import os
@@ -11,6 +18,7 @@ import requests
 VISION_ENDPOINT = os.environ.get('AZURE_VISION_ENDPOINT', '').rstrip('/')
 VISION_KEY = os.environ.get('AZURE_VISION_KEY')
 VISION_API_VERSION = os.environ.get('AZURE_VISION_API_VERSION', '2024-02-01')
+VISION_FEATURES = os.environ.get('AZURE_VISION_FEATURES', 'tags')
 
 
 def is_configured():
@@ -20,7 +28,7 @@ def is_configured():
 def analyze_image(image_bytes):
     """Returns {'caption': str, 'tags': [str]} from Azure AI Vision Image Analysis."""
     url = f'{VISION_ENDPOINT}/computervision/imageanalysis:analyze'
-    params = {'api-version': VISION_API_VERSION, 'features': 'caption,tags'}
+    params = {'api-version': VISION_API_VERSION, 'features': VISION_FEATURES}
     headers = {
         'Ocp-Apim-Subscription-Key': VISION_KEY,
         'Content-Type': 'application/octet-stream',
