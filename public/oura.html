@@ -68,20 +68,22 @@
   .banner { background: var(--surface2); border: 1px dashed var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; font-size: 0.85rem; color: var(--text-dim); }
   .banner strong { color: var(--text); }
 
-  .connect-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; text-align: center; margin-bottom: 16px; }
-  .connect-card .ring-icon { font-size: 2.5rem; margin-bottom: 10px; }
-  .connect-card h2 { font-size: 1.05rem; margin-bottom: 6px; }
-  .connect-card p { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px; }
-  .btn-connect { background: var(--accent); color: #0f1117; border: none; border-radius: 10px; padding: 12px 24px; font-size: 0.95rem; font-weight: 700; cursor: pointer; }
-  .btn-connect:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-disconnect { background: none; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer; margin-top: 10px; text-decoration: underline; }
+  .section-title { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin: 18px 4px 8px; }
+  .section-title:first-child { margin-top: 0; }
 
-  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
   .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   .stat-card .label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
   .stat-card .value { font-size: 1.6rem; font-weight: 800; }
   .stat-card .unit { font-size: 0.8rem; color: var(--text-muted); font-weight: 400; }
   .stat-card svg { width: 100%; height: 32px; margin-top: 8px; display: block; }
+  .stat-card .approx-note { font-size: 0.65rem; color: var(--text-muted); margin-top: 6px; line-height: 1.3; }
+
+  .badge-card .value { font-size: 1.1rem; }
+  .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.85rem; font-weight: 700; }
+  .badge.low { background: rgba(16,185,129,0.15); color: var(--accent); }
+  .badge.watch { background: rgba(217,119,6,0.15); color: var(--warn); }
+  .badge.elevated { background: rgba(220,38,38,0.15); color: var(--danger); }
 
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: flex; z-index: 100; }
   .nav-item { flex: 1; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; text-decoration: none; color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -129,81 +131,81 @@ function avg(arr) {
   return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
 }
 
-async function loadOura() {
-  const params = new URLSearchParams(window.location.search);
-  const status = await (await fetch('/api/oura/status')).json();
-
-  if (params.get('oura_error')) {
-    document.getElementById('mainContent').insertAdjacentHTML('afterbegin',
-      '<div class="banner">Couldn\'t connect to Oura — please try again.</div>');
-  }
-
-  if (!status.connected) {
-    renderConnectCard(status.configured);
-  }
-
-  const summary = await (await fetch('/api/oura/summary?days=30')).json();
-  renderStats(summary, status.connected);
-}
-
-function renderConnectCard(configured) {
-  const html = `
-    <div class="connect-card">
-      <div class="ring-icon">💍</div>
-      <h2>Connect your Oura Ring</h2>
-      <p>${configured
-        ? 'Sign in with Oura to bring your sleep, readiness and activity data into NutriLog.'
-        : 'Oura integration isn\'t configured on this app yet — showing demo data below.'}</p>
-      <button class="btn-connect" id="connectBtn" ${configured ? '' : 'disabled'}>Connect to Oura</button>
+function card(label, unit, value, values, color) {
+  return `
+    <div class="stat-card">
+      <div class="label">${label}${unit ? ` <span class="unit">${unit}</span>` : ''}</div>
+      <div class="value">${value ?? '—'}</div>
+      ${sparkline(values.filter(v => v !== null && v !== undefined), color)}
     </div>`;
-  document.getElementById('mainContent').insertAdjacentHTML('afterbegin', html);
-  const btn = document.getElementById('connectBtn');
-  if (configured) btn.onclick = () => window.location.href = '/api/oura/authorize';
 }
 
-function renderStats(summary, connected) {
+function illnessBadge(score) {
+  if (score === null || score === undefined) return { cls: 'low', label: 'Not enough data' };
+  if (score >= 50) return { cls: 'elevated', label: 'Elevated' };
+  if (score >= 20) return { cls: 'watch', label: 'Watch' };
+  return { cls: 'low', label: 'Low' };
+}
+
+async function loadOura() {
+  const status = await (await fetch('/api/oura/status')).json();
+  const summary = await (await fetch('/api/oura/summary?days=30')).json();
+  renderStats(summary, status);
+}
+
+function renderStats(summary, status) {
   const days = summary.days;
-  const sleep = days.map(d => d.sleep_score);
-  const readiness = days.map(d => d.readiness_score);
-  const steps = days.map(d => d.steps);
-  const hr = days.map(d => d.resting_hr);
+  const f = key => days.map(d => d[key]);
+
+  const latestIllness = days.length ? days[days.length - 1].illness_risk_score : null;
+  const badge = illnessBadge(latestIllness);
 
   const html = `
-    ${summary.demo ? '<div class="banner"><strong>Demo data</strong> — connect your Oura ring above to see real stats.</div>' : ''}
+    ${summary.demo
+      ? `<div class="banner"><strong>Demo data</strong> — ${status.configured
+          ? 'connect your Oura ring in Admin to see real stats.'
+          : "Oura integration isn't configured on this app yet."}</div>`
+      : ''}
+
+    <div class="section-title">Readiness &amp; Recovery</div>
     <div class="card-grid">
-      <div class="stat-card">
-        <div class="label">Sleep Score</div>
-        <div class="value">${avg(sleep) ?? '—'}</div>
-        ${sparkline(sleep.filter(v => v !== null), 'var(--accent2)')}
-      </div>
-      <div class="stat-card">
-        <div class="label">Readiness</div>
-        <div class="value">${avg(readiness) ?? '—'}</div>
-        ${sparkline(readiness.filter(v => v !== null), 'var(--accent)')}
-      </div>
-      <div class="stat-card">
-        <div class="label">Steps <span class="unit">avg/day</span></div>
-        <div class="value">${avg(steps) ?? '—'}</div>
-        ${sparkline(steps.filter(v => v !== null), 'var(--warn)')}
-      </div>
-      <div class="stat-card">
-        <div class="label">Resting HR <span class="unit">bpm</span></div>
-        <div class="value">${avg(hr) ?? '—'}</div>
-        ${sparkline(hr.filter(v => v !== null), 'var(--danger)')}
+      ${card('Readiness Score', '', avg(f('readiness_score')), f('readiness_score'), 'var(--accent)')}
+      ${card('HRV', 'ms', avg(f('hrv_ms')), f('hrv_ms'), 'var(--accent2)')}
+      ${card('Physical Recovery', '', avg(f('physical_recovery_score')), f('physical_recovery_score'), 'var(--accent)')}
+      ${card('Cognitive Recovery', '', avg(f('cognitive_recovery_score')), f('cognitive_recovery_score'), 'var(--accent2)')}
+    </div>
+    <div class="approx-note" style="padding:0 4px 4px;">Physical/Cognitive Recovery are approximated from Oura's resilience &amp; stress data — Oura has no field literally named this.</div>
+
+    <div class="section-title">Sleep</div>
+    <div class="card-grid">
+      ${card('Sleep Score', '', avg(f('sleep_score')), f('sleep_score'), 'var(--accent2)')}
+      ${card('Sleep Efficiency', '%', avg(f('sleep_efficiency')), f('sleep_efficiency'), 'var(--accent)')}
+      ${card('Deep Sleep', 'min', avg(f('deep_sleep_minutes')), f('deep_sleep_minutes'), 'var(--accent2)')}
+      ${card('REM Sleep', 'min', avg(f('rem_sleep_minutes')), f('rem_sleep_minutes'), 'var(--accent)')}
+    </div>
+
+    <div class="section-title">Body</div>
+    <div class="card-grid">
+      ${card('Resting HR', 'bpm', avg(f('resting_hr')), f('resting_hr'), 'var(--danger)')}
+      ${card('SpO2', '%', avg(f('spo2_percent')), f('spo2_percent'), 'var(--accent)')}
+      ${card('Respiratory Rate', 'br/min', avg(f('respiratory_rate')), f('respiratory_rate'), 'var(--accent2)')}
+      ${card('Temp Deviation', '°C', avg(f('temperature_deviation')), f('temperature_deviation'), 'var(--warn)')}
+    </div>
+    <div class="card-grid">
+      <div class="stat-card badge-card" style="grid-column: 1 / -1;">
+        <div class="label">Illness Risk</div>
+        <div class="value"><span class="badge ${badge.cls}">${badge.label}</span></div>
+        <div class="approx-note">Not an Oura metric — a rough local signal from temperature and resting heart rate vs. your recent baseline. Not medical advice.</div>
       </div>
     </div>
-    ${connected ? '<button class="btn-disconnect" id="disconnectBtn">Disconnect Oura</button>' : ''}
+
+    <div class="section-title">Activity</div>
+    <div class="card-grid">
+      ${card('Steps', 'avg/day', avg(f('steps')), f('steps'), 'var(--warn)')}
+      ${card('Active Calories', 'kcal', avg(f('calories_burned')), f('calories_burned'), 'var(--accent)')}
+    </div>
   `;
   document.getElementById('mainContent').insertAdjacentHTML('beforeend', html);
-
-  const disconnectBtn = document.getElementById('disconnectBtn');
-  if (disconnectBtn) {
-    disconnectBtn.onclick = async () => {
-      if (!confirm('Disconnect your Oura ring?')) return;
-      await fetch('/api/oura/disconnect', { method: 'DELETE' });
-      window.location.reload();
-    };
-  }
 }
 
 document.getElementById('mainContent').textContent = '';
