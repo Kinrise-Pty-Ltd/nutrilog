@@ -173,6 +173,32 @@
 </head>
 <body>
 
+<div id="acctSwitcher"></div>
+<script>
+function escapeHtmlSwitcher(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+(async function initAcctSwitcher() {
+  const [me, accessible] = await Promise.all([
+    fetch('/api/me').then(r => r.json()),
+    fetch('/api/delegates/accessible').then(r => r.json())
+  ]);
+  if (!me.acting_as && accessible.length === 0) return;
+
+  const el = document.getElementById('acctSwitcher');
+  el.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 16px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:0.8rem;color:var(--text-muted);';
+  const meLabel = escapeHtmlSwitcher(me.real_display_name || me.real_email);
+  const options = [`<option value="">${meLabel} (you)</option>`].concat(
+    accessible.map(a => `<option value="${a.id}" ${me.acting_as && me.id === a.id ? 'selected' : ''}>${escapeHtmlSwitcher(a.display_name || a.email)}</option>`)
+  );
+  el.innerHTML = `Viewing: <select id="acctSelect" style="font-size:0.8rem;padding:2px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);">${options.join('')}</select>`;
+  document.getElementById('acctSelect').addEventListener('change', async (e) => {
+    await fetch('/api/act-as', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({owner_user_id: e.target.value || null}) });
+    window.location.reload();
+  });
+})();
+</script>
+
 <div class="header">
   <div class="logo">Nutri<span>Log</span> <em>Admin</em></div>
   <div style="display:flex;gap:16px;align-items:center;">
@@ -197,6 +223,19 @@
     <div id="ouraAction"></div>
   </div>
   <div id="ouraBanner"></div>
+</div>
+
+<div class="integrations">
+  <div class="integrations-title">Delegate Access</div>
+  <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px;max-width:560px;line-height:1.5;">
+    Grant someone else (e.g. an assistant) full access to your own log, catalog, and integration settings —
+    they'll see an account switcher after signing in with their own KinGroup account.
+  </div>
+  <div id="delegateList"></div>
+  <div style="display:flex;gap:8px;margin-top:10px;">
+    <input type="email" id="delegateEmail" class="form-control" placeholder="their.email@kingroup.com.au" style="max-width:320px;">
+    <button class="btn-sm" id="btnAddDelegate">+ Grant Access</button>
+  </div>
 </div>
 
 <div class="layout">
@@ -356,13 +395,17 @@ async function loadFoods(catId) {
   renderFoodTable();
 }
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function renderCatList() {
   const list = document.getElementById('catList');
   list.innerHTML = categories.map(cat => `
     <div class="cat-item ${cat.id === selectedCatId ? 'active' : ''}" data-id="${cat.id}">
       <div class="cat-item-left">
-        <span class="cat-icon">${cat.icon}</span>
-        <span class="cat-name">${cat.name}</span>
+        <span class="cat-icon">${escapeHtml(cat.icon)}</span>
+        <span class="cat-name">${escapeHtml(cat.name)}</span>
       </div>
       <div class="cat-actions">
         <button class="icon-btn" data-edit-cat="${cat.id}" title="Edit">✎</button>
@@ -421,8 +464,8 @@ function renderFoodTable() {
       <tbody>
         ${foodItems.map(f => `
           <tr data-id="${f.id}">
-            <td class="td-name">${f.name}${f.notes ? `<br><small style="color:var(--text-muted)">${f.notes}</small>` : ''}</td>
-            <td class="td-serving">${f.serving_size}${f.serving_unit}</td>
+            <td class="td-name">${escapeHtml(f.name)}${f.notes ? `<br><small style="color:var(--text-muted)">${escapeHtml(f.notes)}</small>` : ''}</td>
+            <td class="td-serving">${escapeHtml(f.serving_size)}${escapeHtml(f.serving_unit)}</td>
             <td class="td-cals">${f.calories}</td>
             <td class="td-macro">${f.protein_g}g</td>
             <td class="td-macro">${f.carbs_g}g</td>
@@ -505,7 +548,7 @@ document.getElementById('cancelCatModal').onclick = () => document.getElementByI
 
 function populateCatSelect(selectedId) {
   const sel = document.getElementById('foodCategory');
-  sel.innerHTML = categories.map(c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${c.icon} ${c.name}</option>`).join('');
+  sel.innerHTML = categories.map(c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.icon)} ${escapeHtml(c.name)}</option>`).join('');
 }
 
 function openAddFoodModal() {
@@ -636,9 +679,45 @@ async function loadOuraIntegration() {
   }
 }
 
+// ── Delegate access ──────────────────────────────────────────────────────
+async function loadDelegates() {
+  const rows = await (await fetch('/api/delegates')).json();
+  const list = document.getElementById('delegateList');
+  if (rows.length === 0) {
+    list.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">No one else has access to your account yet.</div>';
+    return;
+  }
+  list.innerHTML = rows.map(r => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:0.85rem;">${escapeHtml(r.delegate_email)}</span>
+      <button class="btn-sm danger" data-del-delegate="${r.id}">Revoke</button>
+    </div>
+  `).join('');
+  list.querySelectorAll('[data-del-delegate]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm("Revoke this person's access to your account?")) return;
+      await fetch(`/api/delegates/${btn.dataset.delDelegate}`, { method: 'DELETE' });
+      loadDelegates();
+    });
+  });
+}
+
+document.getElementById('btnAddDelegate').onclick = async () => {
+  const input = document.getElementById('delegateEmail');
+  const email = input.value.trim();
+  if (!email) return;
+  const res = await fetch('/api/delegates', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ email }) });
+  const data = await res.json();
+  if (!res.ok) { showToast(data.error, true); return; }
+  input.value = '';
+  showToast('Access granted');
+  loadDelegates();
+};
+
 // Init
 loadCategories();
 loadOuraIntegration();
+loadDelegates();
 </script>
 </body>
 </html>

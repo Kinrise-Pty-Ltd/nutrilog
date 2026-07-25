@@ -115,6 +115,32 @@
 </head>
 <body>
 
+<div id="acctSwitcher"></div>
+<script>
+function escapeHtmlSwitcher(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+(async function initAcctSwitcher() {
+  const [me, accessible] = await Promise.all([
+    fetch('/api/me').then(r => r.json()),
+    fetch('/api/delegates/accessible').then(r => r.json())
+  ]);
+  if (!me.acting_as && accessible.length === 0) return;
+
+  const el = document.getElementById('acctSwitcher');
+  el.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 16px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:0.8rem;color:var(--text-muted);';
+  const meLabel = escapeHtmlSwitcher(me.real_display_name || me.real_email);
+  const options = [`<option value="">${meLabel} (you)</option>`].concat(
+    accessible.map(a => `<option value="${a.id}" ${me.acting_as && me.id === a.id ? 'selected' : ''}>${escapeHtmlSwitcher(a.display_name || a.email)}</option>`)
+  );
+  el.innerHTML = `Viewing: <select id="acctSelect" style="font-size:0.8rem;padding:2px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);">${options.join('')}</select>`;
+  document.getElementById('acctSelect').addEventListener('change', async (e) => {
+    await fetch('/api/act-as', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({owner_user_id: e.target.value || null}) });
+    window.location.reload();
+  });
+})();
+</script>
+
 <div class="header">
   <div class="logo">Nutri<span>Log</span></div>
   <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>

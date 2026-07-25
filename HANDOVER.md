@@ -110,11 +110,46 @@ Not yet set (Oura still blocked — see below): `OURA_CLIENT_ID`,
 | Feature | Status |
 |---|---|
 | Multi-user auth, calendar, camera scan, barcode scan | ✅ Live |
+| Per-user food catalog + delegate ("act as") access | ✅ Built, tested locally against a simulated copy of production's current data shape — **not yet deployed**, see below |
 | Azure AI Vision food recognition | ✅ Live (tags + caption, two-region setup) |
 | iPhone Health | ✅ Live, but **Ruffy hasn't set up the Shortcuts automation yet** — shows demo data |
 | Oura Ring | ⚠️ **Blocked** — Ruffy needs to register an OAuth app at cloud.ouraring.com ("My Applications", redirect URI `https://nutrilog-app.azurewebsites.net/api/oura/callback`) and send the client ID/secret. Shows demo data until then. |
 | MCP server (`/api/mcp`) | ✅ Deployed and verified working standalone |
 | Copilot Studio connection | 🔧 **In progress** — see below |
+
+### Per-user catalog + delegate access — what's changing, and the deploy risk
+
+`categories`/`food_items` used to be one shared catalog across every user
+(deliberately, for a 2-user app). As of this work they're **per-user**:
+each user gets their own private catalog (seeded with the same starter set
+Ruffy originally had), and a stored-XSS fix was applied alongside it (see
+`SECURITY_REVIEW.md`).
+
+New: **delegated access** — an owner can grant another Entra-assigned user
+full access to their own account (data + config) by email, self-service,
+from Admin's "Delegate Access" section. This is specifically for **Ruffy's
+executive assistant**, who needs access to his log/catalog/settings via the
+website. Before she can use it: **she needs her own KinGroup (Entra)
+account assigned in the "NutriLog App Service Auth" Enterprise Application**
+(same allow-list step as any other user — see the Entra section above), and
+Ruffy needs to grant her access once from his own Admin page after that.
+
+**Deploy risk**: this includes a one-time production data migration
+(`db.py`'s `_migrate_catalog_to_per_user()`) that clones the existing shared
+catalog into a private copy per existing user and remaps their food_log
+history to point at their own clone — the shared originals are left behind
+(orphaned, not deleted) rather than risking a destructive `DROP`/`DELETE`
+against production data. It also drops `categories.name`'s global `UNIQUE`
+constraint (two users both having "Breakfast" is now expected). Tested
+thoroughly against a locally-reconstructed copy of production's current
+schema+data shape (see the session that built this for the exact test
+script), including idempotency (safe to run `init_db()` twice) — but this is
+the same category of change (schema migration touching an already-populated
+production table) that caused the July 25 barcode outage, so: **take an
+Azure SQL point-in-time-restore-eligible backup point before merging this**
+(Basic tier has automatic backups, but confirm a recent restore point
+exists), and watch `az webapp log tail` through the first restart after
+deploy.
 
 ### Copilot Studio integration — where it's up to
 

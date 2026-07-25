@@ -8,19 +8,27 @@ CREATE TABLE dbo.users (
 );
 GO
 
+-- categories/food_items are per-user (each user gets their own catalog,
+-- seeded with the same starter set on account creation) — see
+-- db.py's _migrate_catalog_to_per_user() for how the previously-shared
+-- catalog gets split, and CLAUDE.md for why `name` isn't UNIQUE here
+-- (two users both having a "Breakfast" category is expected).
 IF OBJECT_ID('dbo.categories', 'U') IS NULL
 CREATE TABLE dbo.categories (
     id NVARCHAR(64) PRIMARY KEY,
-    name NVARCHAR(200) NOT NULL UNIQUE,
+    user_id NVARCHAR(64) NOT NULL,
+    name NVARCHAR(200) NOT NULL,
     icon NVARCHAR(16) DEFAULT N'🍽️',
     sort_order INT DEFAULT 0,
-    created_at DATETIME2 DEFAULT SYSUTCDATETIME()
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    FOREIGN KEY (user_id) REFERENCES dbo.users(id)
 );
 GO
 
 IF OBJECT_ID('dbo.food_items', 'U') IS NULL
 CREATE TABLE dbo.food_items (
     id NVARCHAR(64) PRIMARY KEY,
+    user_id NVARCHAR(64) NOT NULL,
     category_id NVARCHAR(64) NOT NULL,
     name NVARCHAR(300) NOT NULL,
     serving_size NVARCHAR(50) NOT NULL,
@@ -32,7 +40,8 @@ CREATE TABLE dbo.food_items (
     notes NVARCHAR(1000) NULL,
     barcode NVARCHAR(64) NULL,
     created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-    FOREIGN KEY (category_id) REFERENCES dbo.categories(id)
+    FOREIGN KEY (category_id) REFERENCES dbo.categories(id),
+    FOREIGN KEY (user_id) REFERENCES dbo.users(id)
 );
 GO
 
@@ -123,6 +132,21 @@ CREATE TABLE dbo.iphone_health_daily (
 );
 GO
 
+-- Self-service delegation: an owner grants their own account's data/config
+-- access to another Entra-assigned user by email (matched at act-as time,
+-- not at grant time, so it works even before the delegate has ever signed
+-- in). See app.py's /api/delegates* and /api/act-as routes.
+IF OBJECT_ID('dbo.user_delegates', 'U') IS NULL
+CREATE TABLE dbo.user_delegates (
+    id NVARCHAR(64) PRIMARY KEY,
+    owner_user_id NVARCHAR(64) NOT NULL,
+    delegate_email NVARCHAR(256) NOT NULL,
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    FOREIGN KEY (owner_user_id) REFERENCES dbo.users(id),
+    CONSTRAINT UQ_user_delegates_owner_email UNIQUE (owner_user_id, delegate_email)
+);
+GO
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_food_log_user_date')
 CREATE INDEX idx_food_log_user_date ON dbo.food_log(user_id, log_date);
 GO
@@ -134,3 +158,14 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_iphone_health_user_date')
 CREATE INDEX idx_iphone_health_user_date ON dbo.iphone_health_daily(user_id, date);
 GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_user_delegates_email')
+CREATE INDEX idx_user_delegates_email ON dbo.user_delegates(delegate_email);
+GO
+
+-- idx_categories_user / idx_food_items_user are NOT declared here on purpose:
+-- user_id is a new column on tables that already exist in production, so
+-- (per CLAUDE.md) their index must be created via _ensure_index() in db.py
+-- *after* the column migration runs, not as a raw CREATE INDEX here — this
+-- script runs unconditionally before that migration on any database where
+-- categories/food_items predate this change.

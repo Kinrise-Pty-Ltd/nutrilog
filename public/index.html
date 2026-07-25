@@ -177,6 +177,32 @@
 </head>
 <body>
 
+<div id="acctSwitcher"></div>
+<script>
+function escapeHtmlSwitcher(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+(async function initAcctSwitcher() {
+  const [me, accessible] = await Promise.all([
+    fetch('/api/me').then(r => r.json()),
+    fetch('/api/delegates/accessible').then(r => r.json())
+  ]);
+  if (!me.acting_as && accessible.length === 0) return;
+
+  const el = document.getElementById('acctSwitcher');
+  el.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 16px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:0.8rem;color:var(--text-muted);';
+  const meLabel = escapeHtmlSwitcher(me.real_display_name || me.real_email);
+  const options = [`<option value="">${meLabel} (you)</option>`].concat(
+    accessible.map(a => `<option value="${a.id}" ${me.acting_as && me.id === a.id ? 'selected' : ''}>${escapeHtmlSwitcher(a.display_name || a.email)}</option>`)
+  );
+  el.innerHTML = `Viewing: <select id="acctSelect" style="font-size:0.8rem;padding:2px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);">${options.join('')}</select>`;
+  document.getElementById('acctSelect').addEventListener('change', async (e) => {
+    await fetch('/api/act-as', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({owner_user_id: e.target.value || null}) });
+    window.location.reload();
+  });
+})();
+</script>
+
 <div class="header">
   <div class="header-left">
     <div class="logo">Nutri<span>Log</span></div>
@@ -344,6 +370,10 @@ function updateSummary(summary) {
   document.getElementById('totalFat').textContent = Math.round(t.total_fat || 0) + 'g';
 }
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function renderSlots() {
   const container = document.getElementById('slotsContainer');
   container.innerHTML = '';
@@ -359,9 +389,9 @@ function renderSlots() {
     card.innerHTML = `
       <div class="slot-header">
         <div class="slot-title">
-          <span class="slot-icon">${cat.icon}</span>
+          <span class="slot-icon">${escapeHtml(cat.icon)}</span>
           <div>
-            <div class="slot-name">${cat.name}</div>
+            <div class="slot-name">${escapeHtml(cat.name)}</div>
             <div class="slot-meta">${slotEntries.length} item${slotEntries.length !== 1 ? 's' : ''}</div>
           </div>
         </div>
@@ -376,15 +406,15 @@ function renderSlots() {
             slotEntries.map(e => `
               <div class="log-entry" data-id="${e.id}">
                 <div class="log-entry-left">
-                  <div class="log-entry-name">${e.food_name}</div>
-                  <div class="log-entry-meta">${e.quantity > 1 ? e.quantity + '× ' : ''}${e.serving_size}${e.serving_unit}</div>
+                  <div class="log-entry-name">${escapeHtml(e.food_name)}</div>
+                  <div class="log-entry-meta">${e.quantity > 1 ? e.quantity + '× ' : ''}${escapeHtml(e.serving_size)}${escapeHtml(e.serving_unit)}</div>
                 </div>
                 <span class="log-entry-cals">${e.calories_actual} kcal</span>
                 <button class="btn-remove" data-lid="${e.id}">✕</button>
               </div>
             `).join('')}
         </div>
-        <button class="add-food-btn" data-slot="${cat.id}" data-name="${cat.name}">+ Add ${cat.name} item</button>
+        <button class="add-food-btn" data-slot="${cat.id}" data-name="${escapeHtml(cat.name)}">+ Add ${escapeHtml(cat.name)} item</button>
       </div>
     `;
 
@@ -441,12 +471,12 @@ function renderFoodList(query) {
   });
 
   list.innerHTML = Object.entries(groups).map(([cat, items]) => `
-    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;padding:8px 4px 4px">${cat}</div>
+    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;padding:8px 4px 4px">${escapeHtml(cat)}</div>
     ${items.map(f => `
       <div class="food-option" data-id="${f.id}">
         <div class="food-option-left">
-          <div class="food-name">${f.name}</div>
-          <div class="food-serving">${f.serving_size}${f.serving_unit}${f.protein_g > 0 ? ` · P:${f.protein_g}g C:${f.carbs_g}g F:${f.fat_g}g` : ''}</div>
+          <div class="food-name">${escapeHtml(f.name)}</div>
+          <div class="food-serving">${escapeHtml(f.serving_size)}${escapeHtml(f.serving_unit)}${f.protein_g > 0 ? ` · P:${f.protein_g}g C:${f.carbs_g}g F:${f.fat_g}g` : ''}</div>
         </div>
         <div class="food-option-right">${f.calories} kcal</div>
       </div>
@@ -564,9 +594,9 @@ async function onBarcodeDetected(code) {
 function renderScanResult(result) {
   const statusEl = document.getElementById('scanStatus');
   if (result.caption) {
-    statusEl.innerHTML = `We saw: <span class="caption">"${result.caption}"</span>`;
+    statusEl.innerHTML = `We saw: <span class="caption">"${escapeHtml(result.caption)}"</span>`;
   } else if (result.tags && result.tags.length) {
-    statusEl.innerHTML = `We detected: <span class="caption">${result.tags.slice(0, 5).join(', ')}</span>`;
+    statusEl.innerHTML = `We detected: <span class="caption">${result.tags.slice(0, 5).map(escapeHtml).join(', ')}</span>`;
   } else {
     statusEl.innerHTML = `Couldn't recognise anything useful — try searching instead.`;
   }

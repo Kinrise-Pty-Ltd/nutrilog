@@ -1,7 +1,8 @@
+import os
 import uuid
 from datetime import date, datetime
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_from_directory, session
 
 import barcode
 import health
@@ -12,6 +13,7 @@ from auth import load_current_user
 from db import get_db, init_db
 
 app = Flask(__name__, static_folder='public')
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-only-insecure-key')
 
 # Runs at import time (not just `python app.py`) so it also fires under
 # gunicorn, which is how this app actually runs in production (startup.sh).
@@ -33,12 +35,33 @@ def attach_user():
             return jsonify({'error': 'Invalid or missing token'}), 401
         with get_db() as db:
             g.user = db.query_one("SELECT * FROM users WHERE id=?", (user_id,))
+        g.real_user = g.user
         return
 
     if request.path.startswith('/api/'):
-        g.user = load_current_user()
-        if g.user is None:
+        g.real_user = load_current_user()
+        if g.real_user is None:
             return jsonify({'error': 'Unauthorized'}), 401
+        g.user = g.real_user
+
+        # Delegated access ("act as"): a user can view/edit another user's
+        # data + config if that owner has granted them access by email (see
+        # /api/delegates*). Re-validated on every request (not just at grant
+        # time) so a revoked grant takes effect immediately, and re-checked
+        # against g.real_user's email specifically — never the currently
+        # acted-as identity — so delegation can't be chained/escalated.
+        acting_as = session.get('acting_as')
+        if acting_as:
+            with get_db() as db:
+                owner = db.query_one(
+                    "SELECT u.* FROM users u JOIN user_delegates d ON d.owner_user_id = u.id "
+                    "WHERE u.id=? AND d.delegate_email=?",
+                    (acting_as, g.real_user['email'])
+                )
+            if owner:
+                g.user = owner
+            else:
+                session.pop('acting_as', None)
 
 
 # ── STATIC FILES ──────────────────────────────────────────────────────────────
@@ -81,15 +104,104 @@ def get_me():
         'id': g.user['id'],
         'email': g.user['email'],
         'display_name': g.user['display_name'],
+        'real_email': g.real_user['email'],
+        'real_display_name': g.real_user['display_name'],
+        'acting_as': g.user['id'] != g.real_user['id'],
     })
 
 
-# ── CATEGORIES API (shared/global catalog) ────────────────────────────────────
+# ── DELEGATED ACCESS ("act as") ────────────────────────────────────────────
+# Self-service: an owner grants another Entra-assigned user (by email) full
+# access to their own account's data and config — e.g. Ruffy granting his
+# executive assistant access to his log/catalog/integration settings. The
+# grant is matched by email at act-as time, so it works even before the
+# delegate has ever signed in. Once acting-as is active, every other route
+# in this file is automatically scoped to the owner via g.user (see
+# attach_user() above) — nothing else needed per-route.
+
+@app.route('/api/delegates', methods=['GET'])
+def list_delegates():
+    """Who has been granted access to *my* (g.user's) account."""
+    with get_db() as db:
+        rows = db.query(
+            "SELECT id, delegate_email, created_at FROM user_delegates WHERE owner_user_id=? ORDER BY created_at",
+            (g.user['id'],)
+        )
+    return jsonify(rows)
+
+
+@app.route('/api/delegates', methods=['POST'])
+def add_delegate():
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({'error': 'email is required'}), 400
+    if email == g.user['email'].lower():
+        return jsonify({'error': "You can't delegate access to yourself"}), 400
+
+    delegate_id = str(uuid.uuid4())
+    with get_db() as db:
+        existing = db.query_one(
+            "SELECT id FROM user_delegates WHERE owner_user_id=? AND delegate_email=?",
+            (g.user['id'], email)
+        )
+        if existing:
+            return jsonify({'error': 'Already granted'}), 400
+        db.execute(
+            "INSERT INTO user_delegates (id, owner_user_id, delegate_email) VALUES (?,?,?)",
+            (delegate_id, g.user['id'], email)
+        )
+    return jsonify({'id': delegate_id, 'delegate_email': email}), 201
+
+
+@app.route('/api/delegates/<delegate_id>', methods=['DELETE'])
+def remove_delegate(delegate_id):
+    with get_db() as db:
+        db.execute("DELETE FROM user_delegates WHERE id=? AND owner_user_id=?", (delegate_id, g.user['id']))
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/delegates/accessible', methods=['GET'])
+def accessible_accounts():
+    """Accounts g.real_user (the actual signed-in identity, regardless of
+    who they're currently acting as) has been granted access to."""
+    with get_db() as db:
+        rows = db.query(
+            """SELECT u.id, u.email, u.display_name FROM user_delegates d
+               JOIN users u ON u.id = d.owner_user_id
+               WHERE d.delegate_email=?""",
+            (g.real_user['email'],)
+        )
+    return jsonify(rows)
+
+
+@app.route('/api/act-as', methods=['POST'])
+def act_as():
+    data = request.json or {}
+    owner_id = data.get('owner_user_id')
+    if not owner_id:
+        session.pop('acting_as', None)
+        return jsonify({'acting_as': None})
+
+    with get_db() as db:
+        valid = db.query_one(
+            "SELECT u.id FROM users u JOIN user_delegates d ON d.owner_user_id = u.id "
+            "WHERE u.id=? AND d.delegate_email=?",
+            (owner_id, g.real_user['email'])
+        )
+    if not valid:
+        return jsonify({'error': 'Not authorized to act as this account'}), 403
+
+    session['acting_as'] = owner_id
+    return jsonify({'acting_as': owner_id})
+
+
+# ── CATEGORIES API (per-user catalog) ─────────────────────────────────────────
 
 @app.route('/api/categories', methods=['GET'])
 def get_categories():
     with get_db() as db:
-        rows = db.query("SELECT * FROM categories ORDER BY sort_order, name")
+        rows = db.query("SELECT * FROM categories WHERE user_id=? ORDER BY sort_order, name", (g.user['id'],))
         return jsonify(rows)
 
 
@@ -99,11 +211,13 @@ def create_category():
     if not data.get('name'):
         return jsonify({'error': 'Name required'}), 400
     with get_db() as db:
-        max_order = db.query_one("SELECT COALESCE(MAX(sort_order),0) AS m FROM categories")['m']
+        max_order = db.query_one(
+            "SELECT COALESCE(MAX(sort_order),0) AS m FROM categories WHERE user_id=?", (g.user['id'],)
+        )['m']
         cat_id = str(uuid.uuid4())
         db.execute(
-            "INSERT INTO categories (id, name, icon, sort_order) VALUES (?,?,?,?)",
-            (cat_id, data['name'], data.get('icon', '🍽️'), max_order + 1)
+            "INSERT INTO categories (id, user_id, name, icon, sort_order) VALUES (?,?,?,?,?)",
+            (cat_id, g.user['id'], data['name'], data.get('icon', '🍽️'), max_order + 1)
         )
         row = db.query_one("SELECT * FROM categories WHERE id=?", (cat_id,))
         return jsonify(row), 201
@@ -114,10 +228,12 @@ def update_category(cat_id):
     data = request.json
     with get_db() as db:
         db.execute(
-            "UPDATE categories SET name=?, icon=?, sort_order=? WHERE id=?",
-            (data['name'], data.get('icon', '🍽️'), data.get('sort_order', 0), cat_id)
+            "UPDATE categories SET name=?, icon=?, sort_order=? WHERE id=? AND user_id=?",
+            (data['name'], data.get('icon', '🍽️'), data.get('sort_order', 0), cat_id, g.user['id'])
         )
-        row = db.query_one("SELECT * FROM categories WHERE id=?", (cat_id,))
+        row = db.query_one("SELECT * FROM categories WHERE id=? AND user_id=?", (cat_id, g.user['id']))
+        if not row:
+            return jsonify({'error': 'Category not found'}), 404
         return jsonify(row)
 
 
@@ -125,15 +241,15 @@ def update_category(cat_id):
 def delete_category(cat_id):
     with get_db() as db:
         item_count = db.query_one(
-            "SELECT COUNT(*) AS n FROM food_items WHERE category_id=?", (cat_id,)
+            "SELECT COUNT(*) AS n FROM food_items WHERE category_id=? AND user_id=?", (cat_id, g.user['id'])
         )['n']
         if item_count > 0:
             return jsonify({'error': f'Cannot delete: {item_count} food items in this category. Remove items first.'}), 400
-        db.execute("DELETE FROM categories WHERE id=?", (cat_id,))
+        db.execute("DELETE FROM categories WHERE id=? AND user_id=?", (cat_id, g.user['id']))
         return jsonify({'deleted': True})
 
 
-# ── FOOD ITEMS API (shared/global catalog) ────────────────────────────────────
+# ── FOOD ITEMS API (per-user catalog) ──────────────────────────────────────────
 
 @app.route('/api/food-items', methods=['GET'])
 def get_food_items():
@@ -143,14 +259,15 @@ def get_food_items():
             rows = db.query(
                 """SELECT fi.*, c.name as category_name, c.icon as category_icon
                    FROM food_items fi JOIN categories c ON fi.category_id=c.id
-                   WHERE fi.category_id=? ORDER BY fi.name""",
-                (category_id,)
+                   WHERE fi.category_id=? AND fi.user_id=? ORDER BY fi.name""",
+                (category_id, g.user['id'])
             )
         else:
             rows = db.query(
                 """SELECT fi.*, c.name as category_name, c.icon as category_icon
                    FROM food_items fi JOIN categories c ON fi.category_id=c.id
-                   ORDER BY c.sort_order, fi.name"""
+                   WHERE fi.user_id=? ORDER BY c.sort_order, fi.name""",
+                (g.user['id'],)
             )
         return jsonify(rows)
 
@@ -162,12 +279,19 @@ def create_food_item():
     for f in required:
         if not data.get(f) and data.get(f) != 0:
             return jsonify({'error': f'{f} is required'}), 400
-    item_id = str(uuid.uuid4())
+
     with get_db() as db:
+        category = db.query_one(
+            "SELECT id FROM categories WHERE id=? AND user_id=?", (data['category_id'], g.user['id'])
+        )
+        if not category:
+            return jsonify({'error': 'Category not found'}), 404
+
+        item_id = str(uuid.uuid4())
         db.execute(
-            """INSERT INTO food_items (id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (item_id, data['category_id'], data['name'], str(data['serving_size']),
+            """INSERT INTO food_items (id, user_id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (item_id, g.user['id'], data['category_id'], data['name'], str(data['serving_size']),
              data.get('serving_unit', 'g'), int(data['calories']),
              float(data.get('protein_g', 0)), float(data.get('carbs_g', 0)),
              float(data.get('fat_g', 0)), data.get('notes'))
@@ -184,26 +308,34 @@ def create_food_item():
 def update_food_item(item_id):
     data = request.json
     with get_db() as db:
+        category = db.query_one(
+            "SELECT id FROM categories WHERE id=? AND user_id=?", (data['category_id'], g.user['id'])
+        )
+        if not category:
+            return jsonify({'error': 'Category not found'}), 404
+
         db.execute(
             """UPDATE food_items SET category_id=?, name=?, serving_size=?, serving_unit=?,
-               calories=?, protein_g=?, carbs_g=?, fat_g=?, notes=? WHERE id=?""",
+               calories=?, protein_g=?, carbs_g=?, fat_g=?, notes=? WHERE id=? AND user_id=?""",
             (data['category_id'], data['name'], str(data['serving_size']),
              data.get('serving_unit', 'g'), int(data['calories']),
              float(data.get('protein_g', 0)), float(data.get('carbs_g', 0)),
-             float(data.get('fat_g', 0)), data.get('notes'), item_id)
+             float(data.get('fat_g', 0)), data.get('notes'), item_id, g.user['id'])
         )
         row = db.query_one(
             """SELECT fi.*, c.name as category_name FROM food_items fi
-               JOIN categories c ON fi.category_id=c.id WHERE fi.id=?""",
-            (item_id,)
+               JOIN categories c ON fi.category_id=c.id WHERE fi.id=? AND fi.user_id=?""",
+            (item_id, g.user['id'])
         )
+        if not row:
+            return jsonify({'error': 'Food item not found'}), 404
         return jsonify(row)
 
 
 @app.route('/api/food-items/<item_id>', methods=['DELETE'])
 def delete_food_item(item_id):
     with get_db() as db:
-        db.execute("DELETE FROM food_items WHERE id=?", (item_id,))
+        db.execute("DELETE FROM food_items WHERE id=? AND user_id=?", (item_id, g.user['id']))
         return jsonify({'deleted': True})
 
 
@@ -399,13 +531,15 @@ def food_recognition():
             food_items = db.query(
                 """SELECT fi.*, c.name as category_name, c.icon as category_icon
                    FROM food_items fi JOIN categories c ON fi.category_id=c.id
-                   WHERE fi.category_id=?""",
-                (category_id,)
+                   WHERE fi.category_id=? AND fi.user_id=?""",
+                (category_id, g.user['id'])
             )
         else:
             food_items = db.query(
                 """SELECT fi.*, c.name as category_name, c.icon as category_icon
-                   FROM food_items fi JOIN categories c ON fi.category_id=c.id"""
+                   FROM food_items fi JOIN categories c ON fi.category_id=c.id
+                   WHERE fi.user_id=?""",
+                (g.user['id'],)
             )
 
     suggestions = vision.match_foods(analysis['caption'], analysis['tags'], food_items)
@@ -432,11 +566,15 @@ def barcode_lookup():
         existing = db.query_one(
             """SELECT fi.*, c.name as category_name, c.icon as category_icon
                FROM food_items fi JOIN categories c ON fi.category_id=c.id
-               WHERE fi.barcode=?""",
-            (code,)
+               WHERE fi.barcode=? AND fi.user_id=?""",
+            (code, g.user['id'])
         )
         if existing:
             return jsonify({'found': True, 'item': existing})
+
+        category = db.query_one("SELECT id FROM categories WHERE id=? AND user_id=?", (category_id, g.user['id']))
+        if not category:
+            return jsonify({'error': 'Category not found'}), 404
 
     try:
         product = barcode.lookup(code)
@@ -450,9 +588,9 @@ def barcode_lookup():
     with get_db() as db:
         db.execute(
             """INSERT INTO food_items
-               (id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, barcode)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (item_id, category_id, product['name'], product['serving_size'], product['serving_unit'],
+               (id, user_id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, barcode)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (item_id, g.user['id'], category_id, product['name'], product['serving_size'], product['serving_unit'],
              product['calories'], product['protein_g'], product['carbs_g'], product['fat_g'], product['barcode'])
         )
         row = db.query_one(
