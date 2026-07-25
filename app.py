@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
+import barcode
 import health
 import oura
 import vision
@@ -412,6 +413,53 @@ def food_recognition():
         'tags': analysis['tags'],
         'suggestions': suggestions
     })
+
+
+# ── BARCODE LOOKUP (packaged food) ────────────────────────────────────────────
+
+@app.route('/api/barcode-lookup', methods=['POST'])
+def barcode_lookup():
+    data = request.json or {}
+    code = data.get('code')
+    category_id = data.get('category_id')
+    if not code:
+        return jsonify({'error': 'code is required'}), 400
+    if not category_id:
+        return jsonify({'error': 'category_id is required'}), 400
+
+    with get_db() as db:
+        existing = db.query_one(
+            """SELECT fi.*, c.name as category_name, c.icon as category_icon
+               FROM food_items fi JOIN categories c ON fi.category_id=c.id
+               WHERE fi.barcode=?""",
+            (code,)
+        )
+        if existing:
+            return jsonify({'found': True, 'item': existing})
+
+    try:
+        product = barcode.lookup(code)
+    except Exception as e:
+        return jsonify({'error': f'Barcode lookup failed: {e}'}), 502
+
+    if not product:
+        return jsonify({'found': False})
+
+    item_id = str(uuid.uuid4())
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO food_items
+               (id, category_id, name, serving_size, serving_unit, calories, protein_g, carbs_g, fat_g, barcode)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (item_id, category_id, product['name'], product['serving_size'], product['serving_unit'],
+             product['calories'], product['protein_g'], product['carbs_g'], product['fat_g'], product['barcode'])
+        )
+        row = db.query_one(
+            """SELECT fi.*, c.name as category_name, c.icon as category_icon
+               FROM food_items fi JOIN categories c ON fi.category_id=c.id WHERE fi.id=?""",
+            (item_id,)
+        )
+    return jsonify({'found': True, 'item': row})
 
 
 # ── OURA INTEGRATION ───────────────────────────────────────────────────────────

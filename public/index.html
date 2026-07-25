@@ -137,6 +137,15 @@
   .scan-status { margin-top: 10px; font-size: 0.8rem; color: var(--text-dim); background: var(--surface2); border-radius: var(--radius-sm); padding: 10px 12px; }
   .scan-status .caption { font-style: italic; }
 
+  /* Barcode scanner overlay */
+  .barcode-overlay { position: fixed; inset: 0; background: #000; z-index: 400; display: none; flex-direction: column; }
+  .barcode-overlay.open { display: flex; }
+  .barcode-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; color: #fff; background: rgba(0,0,0,0.6); font-size: 0.9rem; font-weight: 600; }
+  .barcode-header .modal-close { color: #fff; }
+  #barcodeVideo { flex: 1; width: 100%; object-fit: cover; background: #000; }
+  .barcode-viewfinder { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; max-width: 320px; height: 120px; border: 3px solid var(--accent); border-radius: 12px; box-shadow: 0 0 0 2000px rgba(0,0,0,0.4); pointer-events: none; }
+  .barcode-status { position: absolute; bottom: 24px; left: 0; right: 0; text-align: center; color: #fff; font-size: 0.85rem; padding: 0 20px; }
+
   /* QTY modal */
   .qty-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: none; align-items: center; justify-content: center; padding: 20px; }
   .qty-modal.open { display: flex; }
@@ -164,6 +173,7 @@
   /* Empty state */
   .empty-hint { text-align: center; padding: 16px; color: var(--text-muted); font-size: 0.8rem; }
 </style>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
 </head>
 <body>
 
@@ -228,12 +238,24 @@
       <div style="display:flex;gap:8px;">
         <input class="search-input" id="searchInput" type="text" placeholder="Search foods…" autocomplete="off" style="flex:1;">
         <button class="scan-btn" id="scanBtn" type="button" title="Scan a photo">📷</button>
+        <button class="scan-btn" id="barcodeBtn" type="button" title="Scan a barcode">▮▮▮</button>
       </div>
       <input type="file" id="scanFileInput" accept="image/*" capture="environment" style="display:none;">
       <div id="scanStatus" class="scan-status" style="display:none;"></div>
     </div>
     <div class="food-list" id="foodList"></div>
   </div>
+</div>
+
+<!-- Barcode scanner overlay -->
+<div class="barcode-overlay" id="barcodeOverlay">
+  <div class="barcode-header">
+    <span>Point at a barcode</span>
+    <button class="modal-close" id="closeBarcodeScanner">×</button>
+  </div>
+  <video id="barcodeVideo" playsinline autoplay muted></video>
+  <div class="barcode-viewfinder"></div>
+  <div class="barcode-status" id="barcodeStatus"></div>
 </div>
 
 <!-- Quantity modal -->
@@ -469,6 +491,75 @@ document.getElementById('scanFileInput').addEventListener('change', async (e) =>
   }
   e.target.value = '';
 });
+
+// ── Barcode scanning (packaged food) ────────────────────────────────────────
+let barcodeReader = null;
+let barcodeStream = null;
+let barcodeLookupInFlight = false;
+
+if (typeof ZXing === 'undefined') {
+  document.getElementById('barcodeBtn').style.display = 'none';
+} else {
+  document.getElementById('barcodeBtn').onclick = () => openBarcodeScanner();
+}
+document.getElementById('closeBarcodeScanner').onclick = () => closeBarcodeScanner();
+
+async function openBarcodeScanner() {
+  if (!currentSlot) return;
+  barcodeLookupInFlight = false;
+  document.getElementById('barcodeOverlay').classList.add('open');
+  document.getElementById('barcodeStatus').textContent = '';
+  const video = document.getElementById('barcodeVideo');
+
+  try {
+    barcodeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = barcodeStream;
+
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+    ]);
+    barcodeReader = new ZXing.BrowserMultiFormatReader(hints);
+    // Callback fires repeatedly per decoded frame — barcodeLookupInFlight
+    // guards against triggering a lookup per-frame while one is in progress.
+    barcodeReader.decodeFromVideoDevice(null, video, (result) => {
+      if (result && !barcodeLookupInFlight) onBarcodeDetected(result.getText());
+    });
+  } catch (err) {
+    document.getElementById('barcodeStatus').textContent = "Couldn't access the camera — check permissions.";
+  }
+}
+
+function closeBarcodeScanner() {
+  document.getElementById('barcodeOverlay').classList.remove('open');
+  if (barcodeReader) { barcodeReader.reset(); barcodeReader = null; }
+  if (barcodeStream) { barcodeStream.getTracks().forEach(t => t.stop()); barcodeStream = null; }
+}
+
+async function onBarcodeDetected(code) {
+  barcodeLookupInFlight = true;
+  const statusEl = document.getElementById('barcodeStatus');
+  statusEl.textContent = `Looking up ${code}…`;
+
+  try {
+    const res = await fetch('/api/barcode-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, category_id: currentSlot })
+    });
+    const result = await res.json();
+    if (result.found) {
+      closeBarcodeScanner();
+      openQtyModal(result.item);
+      return;
+    }
+    statusEl.textContent = `No product found for ${code} — try searching instead, or scan another item.`;
+  } catch (err) {
+    statusEl.textContent = 'Lookup failed — try again.';
+  }
+  barcodeLookupInFlight = false;
+}
 
 function renderScanResult(result) {
   const statusEl = document.getElementById('scanStatus');

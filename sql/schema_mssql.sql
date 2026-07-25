@@ -30,6 +30,7 @@ CREATE TABLE dbo.food_items (
     carbs_g FLOAT DEFAULT 0,
     fat_g FLOAT DEFAULT 0,
     notes NVARCHAR(1000) NULL,
+    barcode NVARCHAR(64) NULL,
     created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
     FOREIGN KEY (category_id) REFERENCES dbo.categories(id)
 );
@@ -120,6 +121,10 @@ CREATE TABLE dbo.iphone_health_daily (
     FOREIGN KEY (user_id) REFERENCES dbo.users(id),
     CONSTRAINT UQ_iphone_health_user_date UNIQUE (user_id, date)
 );
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_food_items_barcode')
+CREATE INDEX idx_food_items_barcode ON dbo.food_items(barcode);
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_food_log_user_date')

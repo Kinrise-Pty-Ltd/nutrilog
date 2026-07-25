@@ -80,6 +80,7 @@ def init_db():
             db.conn.executescript(script)
 
     _migrate_columns('oura_daily', OURA_DAILY_NEW_COLUMNS)
+    _migrate_columns('food_items', FOOD_ITEMS_NEW_COLUMNS)
     _seed_defaults()
 
 
@@ -98,6 +99,10 @@ OURA_DAILY_NEW_COLUMNS = {
     'physical_recovery_score': {'sqlite': 'INTEGER', 'mssql': 'INT'},
     'cognitive_recovery_score': {'sqlite': 'INTEGER', 'mssql': 'INT'},
     'illness_risk_score': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+}
+
+FOOD_ITEMS_NEW_COLUMNS = {
+    'barcode': {'sqlite': 'TEXT', 'mssql': 'NVARCHAR(64)'},
 }
 
 

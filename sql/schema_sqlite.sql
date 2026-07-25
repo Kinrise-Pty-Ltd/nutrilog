@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS food_items (
     carbs_g REAL DEFAULT 0,
     fat_g REAL DEFAULT 0,
     notes TEXT,
+    barcode TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );
@@ -106,6 +107,7 @@ CREATE TABLE IF NOT EXISTS iphone_health_daily (
     UNIQUE (user_id, date)
 );
 
+CREATE INDEX IF NOT EXISTS idx_food_items_barcode ON food_items(barcode);
 CREATE INDEX IF NOT EXISTS idx_food_log_user_date ON food_log(user_id, log_date);
 CREATE INDEX IF NOT EXISTS idx_oura_daily_user_date ON oura_daily(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_iphone_health_user_date ON iphone_health_daily(user_id, date);
