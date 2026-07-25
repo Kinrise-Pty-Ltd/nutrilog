@@ -472,9 +472,13 @@ document.getElementById('scanFileInput').addEventListener('change', async (e) =>
 
 function renderScanResult(result) {
   const statusEl = document.getElementById('scanStatus');
-  statusEl.innerHTML = result.caption
-    ? `We saw: <span class="caption">"${result.caption}"</span>`
-    : `No strong match — try searching instead.`;
+  if (result.caption) {
+    statusEl.innerHTML = `We saw: <span class="caption">"${result.caption}"</span>`;
+  } else if (result.tags && result.tags.length) {
+    statusEl.innerHTML = `We detected: <span class="caption">${result.tags.slice(0, 5).join(', ')}</span>`;
+  } else {
+    statusEl.innerHTML = `Couldn't recognise anything useful — try searching instead.`;
+  }
 
   const list = document.getElementById('foodList');
   if (result.suggestions.length === 0) return;
