@@ -438,12 +438,12 @@ def oura_callback():
     code = request.args.get('code')
     state = request.args.get('state')
     if not code or state != g.user['id']:
-        return redirect('/oura?oura_error=1')
+        return redirect('/admin?oura_error=1')
     try:
         oura.exchange_code(g.user['id'], code)
     except Exception:
-        return redirect('/oura?oura_error=1')
-    return redirect('/oura?oura_connected=1')
+        return redirect('/admin?oura_error=1')
+    return redirect('/admin?oura_connected=1')
 
 
 @app.route('/api/oura/disconnect', methods=['DELETE'])

@@ -79,7 +79,44 @@ def init_db():
         else:
             db.conn.executescript(script)
 
+    _migrate_columns('oura_daily', OURA_DAILY_NEW_COLUMNS)
     _seed_defaults()
+
+
+# Columns added after the initial oura_daily CREATE TABLE shipped. New
+# columns must be added here (not just the schema_*.sql files) so they also
+# land on databases that already have the table — CREATE TABLE IF NOT EXISTS
+# is a no-op once the table exists.
+OURA_DAILY_NEW_COLUMNS = {
+    'hrv_ms': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'sleep_efficiency': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'deep_sleep_minutes': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'rem_sleep_minutes': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'temperature_deviation': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'spo2_percent': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'respiratory_rate': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'physical_recovery_score': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'cognitive_recovery_score': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'illness_risk_score': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+}
+
+
+def _migrate_columns(table, columns):
+    with get_db() as db:
+        if BACKEND == 'mssql':
+            existing = {r['COLUMN_NAME'].lower() for r in db.query(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME=?", (table,)
+            )}
+        else:
+            existing = {r['name'].lower() for r in db.query(f"PRAGMA table_info({table})")}
+
+        for col, types in columns.items():
+            if col.lower() in existing:
+                continue
+            col_type = types[BACKEND]
+            db.execute(f"ALTER TABLE {table} ADD {col} {col_type} NULL"
+                       if BACKEND == 'mssql' else
+                       f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
 
 
 def _seed_defaults():

@@ -1,9 +1,29 @@
 """Oura Ring integration: OAuth2 (Oura deprecated Personal Access Tokens in
 Dec 2025 — new integrations must use OAuth2), plus a deterministic demo
 dataset shown until a user actually connects their ring.
+
+Metric provenance — worth knowing when debugging real data:
+  - sleep_score, readiness_score, activity_score, steps, calories_burned,
+    temperature_deviation, spo2_percent: direct fields from Oura's daily_*
+    endpoints.
+  - hrv_ms, sleep_efficiency, deep_sleep_minutes, rem_sleep_minutes,
+    respiratory_rate: pulled from the detailed `sleep` endpoint (Oura's
+    per-session data), not a daily summary endpoint.
+  - resting_hr: approximated as the day's minimum heart-rate sample, since
+    Oura's v2 API doesn't expose a single "resting HR" daily field.
+  - physical_recovery_score: approximated from daily_resilience's
+    sleep_recovery/daytime_recovery contributors — Oura doesn't expose a
+    field literally called "physical recovery".
+  - cognitive_recovery_score: approximated from daily_stress's recovery_high
+    minutes, normalized to 0-100. Oura has no "cognitive recovery" metric;
+    this is our own rough proxy.
+  - illness_risk_score: NOT an Oura field at all. Computed locally from
+    temperature_deviation and resting_hr deviating from the recent personal
+    baseline — a simple heuristic, not a clinical or official signal.
 """
 import hashlib
 import os
+import statistics
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -19,7 +39,15 @@ API_BASE = 'https://api.ouraring.com/v2/usercollection'
 CLIENT_ID = os.environ.get('OURA_CLIENT_ID')
 CLIENT_SECRET = os.environ.get('OURA_CLIENT_SECRET')
 REDIRECT_URI = os.environ.get('OURA_REDIRECT_URI')
-SCOPES = 'daily heartrate'
+SCOPES = 'daily heartrate spo2'
+
+DAILY_FIELDS = [
+    'sleep_score', 'readiness_score', 'activity_score', 'steps', 'resting_hr',
+    'total_sleep_minutes', 'calories_burned', 'hrv_ms', 'sleep_efficiency',
+    'deep_sleep_minutes', 'rem_sleep_minutes', 'temperature_deviation',
+    'spo2_percent', 'respiratory_rate', 'physical_recovery_score',
+    'cognitive_recovery_score', 'illness_risk_score',
+]
 
 
 def is_configured():
@@ -117,6 +145,64 @@ def _resting_hr_by_day(headers, start, end):
         return {}
 
 
+def _sleep_detail_by_day(headers, start, end):
+    """Pulls HRV/efficiency/deep/REM/respiratory rate from the detailed sleep
+    endpoint, preferring the 'long_sleep' period when a day has multiple."""
+    try:
+        resp = requests.get(f'{API_BASE}/sleep', headers=headers, params={
+            'start_date': start.isoformat(), 'end_date': end.isoformat(),
+        }, timeout=15)
+        resp.raise_for_status()
+        by_day = {}
+        for period in resp.json().get('data', []):
+            day = period.get('day')
+            if not day:
+                continue
+            if day in by_day and period.get('type') != 'long_sleep':
+                continue  # keep the long_sleep period if we already have one
+            by_day[day] = {
+                'hrv_ms': period.get('average_hrv'),
+                'sleep_efficiency': period.get('efficiency'),
+                'deep_sleep_minutes': _seconds_to_minutes(period.get('deep_sleep_duration')),
+                'rem_sleep_minutes': _seconds_to_minutes(period.get('rem_sleep_duration')),
+                'respiratory_rate': period.get('average_breath'),
+                'total_sleep_minutes': _seconds_to_minutes(period.get('total_sleep_duration')),
+            }
+        return by_day
+    except requests.RequestException:
+        return {}
+
+
+def _seconds_to_minutes(seconds):
+    return round(seconds / 60) if seconds is not None else None
+
+
+def _compute_illness_risk(by_date):
+    """Local heuristic only — not an Oura field. Flags days where temperature
+    deviation and resting HR both sit meaningfully above the window's own
+    baseline, similar in spirit to (but not the same as) Oura's own illness
+    insights, which aren't exposed via the public API."""
+    temps = [v['temperature_deviation'] for v in by_date.values() if v.get('temperature_deviation') is not None]
+    hrs = [v['resting_hr'] for v in by_date.values() if v.get('resting_hr') is not None]
+    if len(temps) < 3 or len(hrs) < 3:
+        for v in by_date.values():
+            v['illness_risk_score'] = None
+        return
+
+    temp_baseline = statistics.median(temps)
+    hr_baseline = statistics.median(hrs)
+
+    for v in by_date.values():
+        temp_dev = v.get('temperature_deviation')
+        hr = v.get('resting_hr')
+        if temp_dev is None or hr is None:
+            v['illness_risk_score'] = None
+            continue
+        temp_signal = max(0.0, (temp_dev - temp_baseline)) * 40
+        hr_signal = max(0, (hr - hr_baseline)) * 4
+        v['illness_risk_score'] = round(min(100, temp_signal + hr_signal))
+
+
 def fetch_live_summary(user_id, days=30):
     """Live-fetches from Oura v2 and caches into oura_daily. Returns the day rows."""
     token = _get_valid_access_token(user_id)
@@ -139,8 +225,12 @@ def fetch_live_summary(user_id, days=30):
         except requests.RequestException:
             pass
 
+    def _readiness(d, row):
+        d['readiness_score'] = row.get('score')
+        d['temperature_deviation'] = row.get('temperature_deviation')
+
     _merge('daily_sleep', lambda d, row: d.__setitem__('sleep_score', row.get('score')))
-    _merge('daily_readiness', lambda d, row: d.__setitem__('readiness_score', row.get('score')))
+    _merge('daily_readiness', _readiness)
 
     def _activity(d, row):
         d['activity_score'] = row.get('score')
@@ -149,32 +239,46 @@ def fetch_live_summary(user_id, days=30):
 
     _merge('daily_activity', _activity)
 
+    def _spo2(d, row):
+        d['spo2_percent'] = (row.get('spo2_percentage') or {}).get('average')
+
+    _merge('daily_spo2', _spo2)
+
+    def _resilience(d, row):
+        contributors = row.get('contributors') or {}
+        parts = [v for v in (contributors.get('sleep_recovery'), contributors.get('daytime_recovery')) if v is not None]
+        d['physical_recovery_score'] = round(sum(parts) / len(parts)) if parts else None
+
+    _merge('daily_resilience', _resilience)
+
+    def _stress(d, row):
+        recovery_minutes = row.get('recovery_high')
+        d['cognitive_recovery_score'] = round(min(100, recovery_minutes / 180 * 100)) if recovery_minutes is not None else None
+
+    _merge('daily_stress', _stress)
+
     resting_hr_by_day = _resting_hr_by_day(headers, start, end)
+    sleep_detail_by_day = _sleep_detail_by_day(headers, start, end)
+
+    for day, detail in sleep_detail_by_day.items():
+        by_date.setdefault(day, {}).update(detail)
+    for day, hr in resting_hr_by_day.items():
+        by_date.setdefault(day, {})['resting_hr'] = hr
+
+    _compute_illness_risk(by_date)
 
     with get_db() as db:
         results = []
         for day, vals in sorted(by_date.items()):
-            row = {
-                'date': day,
-                'sleep_score': vals.get('sleep_score'),
-                'readiness_score': vals.get('readiness_score'),
-                'activity_score': vals.get('activity_score'),
-                'steps': vals.get('steps'),
-                'resting_hr': resting_hr_by_day.get(day),
-                'total_sleep_minutes': None,
-                'calories_burned': vals.get('calories_burned'),
-                'is_demo': False,
-            }
+            row = {'date': day, 'is_demo': False}
+            row.update({f: vals.get(f) for f in DAILY_FIELDS})
             results.append(row)
             db.execute("DELETE FROM oura_daily WHERE user_id=? AND date=?", (user_id, day))
             db.execute(
-                """INSERT INTO oura_daily
-                   (id, user_id, date, sleep_score, readiness_score, activity_score,
-                    steps, resting_hr, total_sleep_minutes, calories_burned, is_demo)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,0)""",
-                (str(uuid.uuid4()), user_id, day, row['sleep_score'], row['readiness_score'],
-                 row['activity_score'], row['steps'], row['resting_hr'],
-                 row['total_sleep_minutes'], row['calories_burned'])
+                f"""INSERT INTO oura_daily
+                   (id, user_id, date, {', '.join(DAILY_FIELDS)}, is_demo)
+                   VALUES (?,?,?,{','.join(['?'] * len(DAILY_FIELDS))},0)""",
+                (str(uuid.uuid4()), user_id, day, *[row[f] for f in DAILY_FIELDS])
             )
     return results
 
@@ -185,15 +289,33 @@ def _demo_day(user_id, day):
     def pick(lo, hi, salt):
         return lo + (seed ^ salt) % (hi - lo + 1)
 
+    def pick_f(lo, hi, salt, decimals=1):
+        span = int((hi - lo) * (10 ** decimals))
+        return round(lo + ((seed ^ salt) % (span + 1)) / (10 ** decimals), decimals)
+
+    sleep_score = pick(65, 92, 1)
+    readiness_score = pick(60, 90, 2)
+    resting_hr = pick(52, 68, 5)
+
     return {
         'date': day.isoformat(),
-        'sleep_score': pick(65, 92, 1),
-        'readiness_score': pick(60, 90, 2),
+        'sleep_score': sleep_score,
+        'readiness_score': readiness_score,
         'activity_score': pick(55, 88, 3),
         'steps': pick(4000, 12000, 4),
-        'resting_hr': pick(52, 68, 5),
+        'resting_hr': resting_hr,
         'total_sleep_minutes': pick(360, 480, 6),
         'calories_burned': pick(1800, 2800, 7),
+        'hrv_ms': pick_f(28, 75, 8),
+        'sleep_efficiency': pick(80, 96, 9),
+        'deep_sleep_minutes': pick(45, 110, 10),
+        'rem_sleep_minutes': pick(60, 130, 11),
+        'temperature_deviation': pick_f(-0.4, 0.5, 12, 2),
+        'spo2_percent': pick_f(95.5, 98.5, 13),
+        'respiratory_rate': pick_f(13.5, 17.5, 14),
+        'physical_recovery_score': round((sleep_score + readiness_score) / 2) + pick(-5, 5, 15),
+        'cognitive_recovery_score': pick(40, 90, 16),
+        'illness_risk_score': pick(0, 12, 17),  # demo days stay "low risk"
         'is_demo': True,
     }
 
