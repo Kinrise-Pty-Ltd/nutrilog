@@ -387,7 +387,9 @@ def add_log_entry():
     quantity = float(data.get('quantity', 1.0))
 
     with get_db() as db:
-        item = db.query_one("SELECT calories FROM food_items WHERE id=?", (data['food_item_id'],))
+        item = db.query_one(
+            "SELECT calories FROM food_items WHERE id=? AND user_id=?", (data['food_item_id'], g.user['id'])
+        )
         if not item:
             return jsonify({'error': 'Food item not found'}), 404
 

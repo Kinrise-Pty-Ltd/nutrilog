@@ -64,9 +64,9 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
 
-  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; }
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; flex-wrap: wrap; row-gap: 10px; align-items: center; justify-content: space-between; }
   .logo { display: flex; align-items: center; gap: 8px; font-size: 1.2rem; font-weight: 800; }
-  .logo img { height: 34px; width: auto; display: block; }
+  .logo img { height: 68px; width: auto; display: block; }
   .logo span { color: var(--accent); }
   .logo em { font-style: normal; font-size: 0.7rem; color: var(--text-muted); margin-left: 8px; text-transform: uppercase; letter-spacing: 1px; font-weight: 400; }
 
@@ -211,7 +211,7 @@ function escapeHtmlSwitcher(str) {
 
 <div class="header">
   <div class="logo"><img src="/public/assets/NutriLog.png" alt="NutriLog"> <em>Admin</em></div>
-  <div style="display:flex;gap:16px;align-items:center;">
+  <div style="display:flex;flex-wrap:wrap;row-gap:8px;gap:16px;align-items:center;justify-content:flex-end;">
     <a class="back-link" href="/calendar">📅 Calendar</a>
     <a class="back-link" href="/oura">💍 Oura</a>
     <a class="back-link" href="/health">🍎 Health</a>
