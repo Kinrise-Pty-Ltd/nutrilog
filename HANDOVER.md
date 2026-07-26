@@ -1,6 +1,6 @@
 # HANDOVER.md
 
-Project status and infrastructure map as of **26 July 2026**. This is a
+Project status and infrastructure map as of **27 July 2026**. This is a
 point-in-time snapshot, not evergreen documentation — for that, see
 [README.md](README.md) (what the app does) and [CLAUDE.md](CLAUDE.md)
 (coding conventions).
@@ -77,9 +77,27 @@ needed.**
 
 Configured via `authsettingsV2` (not the classic v1 schema): Azure AD only
 (every other built-in provider — Apple/Facebook/GitHub/Google/legacy MSA —
-explicitly disabled), `unauthenticatedClientAction: RedirectToLoginPage`,
-**`/api/health/ingest` excluded** from the auth gate (see CLAUDE.md for
-why). HTTPS-only is enabled on the App Service.
+explicitly disabled), `unauthenticatedClientAction: RedirectToLoginPage`.
+
+**`excludedPaths`** (bypasses the login gate entirely for these — everything
+else, including every page route and all of `/api/*`, still requires an
+Entra sign-in):
+- `/api/health/ingest` — Health Auto Export's bearer-token ingest, see CLAUDE.md
+- `/public/favicon/apple-touch-icon.png`, `favicon.ico`, `favicon-16x16.png`,
+  `favicon-32x32.png`, `android-chrome-192x192.png`, `android-chrome-512x512.png`,
+  `site.webmanifest`, and `/public/assets/NutriLog.png` — added 27 July so
+  iOS can actually fetch the touch icon when a user taps "Add to Home
+  Screen". Before this, the icon request got redirected to the Microsoft
+  login page instead of the image, so iOS silently fell back to a
+  generated letter icon. **Confirmed fixed and working** (real device test).
+  Each file is listed individually — `az webapp auth update`'s
+  `excludedPaths` does **not** support a `/public/*`-style wildcard prefix in
+  practice (tried it first; requests still redirected to login even after
+  the config saved correctly). Any new static asset added under `/public/`
+  that needs to load before login has to be added to this list by exact
+  path.
+
+HTTPS-only is enabled on the App Service.
 
 ## GitHub / deployment
 
@@ -122,7 +140,7 @@ Not yet set (Oura still blocked — see below): `OURA_CLIENT_ID`,
 | Oura Ring | ⚠️ **Blocked** — Ruffy needs to register an OAuth app at cloud.ouraring.com ("My Applications", redirect URI `https://nutrilog-app.azurewebsites.net/api/oura/callback`) and send the client ID/secret. Shows demo data until then. |
 | MCP server (`/api/mcp`) | ✅ Deployed and verified working standalone |
 | Copilot Studio connection | 🔧 **In progress** — see below |
-| Favicons + NutriLog logo | ✅ Live — added by a colleague (Riley Webb) via a PR outside this session's direct work; header text ("NutriLog" wordmark) was later removed in favour of just the enlarged logo image |
+| Favicons + NutriLog logo | ✅ Live — added by a colleague (Riley Webb) via a PR outside this session's direct work; header text ("NutriLog" wordmark) was later removed in favour of just the enlarged (doubled, 27 July) logo image. "Add to Home Screen" icon confirmed working on a real iPhone as of 27 July (see Easy Auth section — needed an `excludedPaths` fix). |
 
 ### Per-user catalog + delegate access
 
@@ -191,6 +209,27 @@ channels, including **Microsoft 365 Copilot itself** — no separate
   always-visible low/high caption).
 - **Voice logging, move-entry, quick-add-new-food**: added to the main log
   page — see README.md for what each does.
+
+## Recent work (27 July)
+
+- **Data-isolation review**: prompted by a user report of possibly seeing
+  another user's data. Audited every query touching food_log, categories,
+  food_items, delegate ("act as") access, Oura, Health, and the MCP tools —
+  all correctly scoped by the signed-in user, re-validated per request. One
+  real gap found and fixed: `POST /api/log` looked up the referenced food
+  item by id alone with no ownership check, so a forged/foreign item id
+  would have surfaced another user's private food item's name/macros
+  into your log instead of 404ing. No root cause was confirmed for the
+  original report itself — the most likely explanation is Delegate Access
+  (a live grant would legitimately show another account's data through the
+  account switcher), not a bug.
+- **Logo doubled** across all 5 pages (42px → 84px; Admin 34px → 68px,
+  since its busier header — logo + 4 nav links + theme toggle — would
+  otherwise overflow horizontally at mobile widths; its header/nav now wrap
+  onto a second row instead of clipping).
+- **"Add to Home Screen" icon fix**: see the Easy Auth section above —
+  `excludedPaths` needed the icon/manifest files added by exact path
+  (wildcard doesn't work). Confirmed fixed on a real device.
 
 ## Deferred / not started
 
