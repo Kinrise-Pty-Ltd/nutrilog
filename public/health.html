@@ -186,11 +186,22 @@ function renderSetup(tokenInfo, connected) {
       <h2>🍎 Bring in iPhone Health data</h2>
       <p>${connected ? 'Connected — receiving data from your phone.' : 'Not connected yet — showing demo data below.'}
       Apple doesn't offer a direct cloud link, so this uses a small automation on your phone to push data here on a schedule.</p>
+      <p><strong>Option A — Health Auto Export app (easiest):</strong></p>
       <ol>
-        <li>On your iPhone, open the <strong>Shortcuts</strong> app and create a new Personal Automation (e.g. daily at 11pm).</li>
-        <li>Add "Get Health Sample" actions for Steps, Active Energy, Resting Energy, Exercise Minutes, Weight, Resting Heart Rate, Sleep.</li>
+        <li>In Health Auto Export, create a new Automation → REST API export.</li>
+        <li>Pick the metrics: Steps, Active Energy, Resting Energy, Exercise Minutes, Weight, Resting Heart Rate, Sleep.</li>
+        <li>Set the export URL to the address below.</li>
+        <li>Under Headers, add one: name <code>Authorization</code>, value <strong>exactly</strong>
+          <code>Bearer &lt;token&gt;</code> — the word "Bearer", one space, then the token below pasted straight in
+          (no extra spaces or line breaks — a common cause of a 401 "Invalid or missing token" error is a stray space
+          or newline from copy/pasting).</li>
+        <li>Set a schedule (e.g. daily) and save.</li>
+      </ol>
+      <p><strong>Option B — Shortcuts app:</strong></p>
+      <ol>
+        <li>Create a new Personal Automation (e.g. daily at 11pm).</li>
+        <li>Add "Get Health Sample" actions for the same metrics as above.</li>
         <li>Add "Get Contents of URL" — POST to the address below, header <code>Authorization: Bearer &lt;token&gt;</code>, JSON body with a <code>date</code> field plus the values.</li>
-        <li>(Alternative: the "Health Auto Export" App Store app can also POST to this same URL/token on a schedule.)</li>
       </ol>
       <div class="field-row">
         <input readonly id="ingestUrl" value="${tokenInfo.ingest_url}">

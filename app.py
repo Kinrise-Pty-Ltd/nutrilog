@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from datetime import date, datetime
 
@@ -28,8 +29,13 @@ def attach_user():
     # own per-user bearer token instead of an Easy Auth session, and in
     # production it must be excluded from Easy Auth's platform-level gate too.
     if request.path == '/api/health/ingest':
-        auth_header = request.headers.get('Authorization', '')
-        token = auth_header[7:].strip() if auth_header.startswith('Bearer ') else ''
+        # Health-tracking apps that require the header to be typed in by
+        # hand (Health Auto Export, Shortcuts) are inconsistent about
+        # "Bearer" casing/spacing — strip it case-insensitively rather than
+        # requiring an exact "Bearer " match, and fall back to treating the
+        # whole header as the token if there's no recognizable prefix at all.
+        auth_header = request.headers.get('Authorization', '').strip()
+        token = re.sub(r'(?i)^bearer\s+', '', auth_header).strip()
         user_id = health.user_id_for_token(token)
         if not user_id:
             return jsonify({'error': 'Invalid or missing token'}), 401
