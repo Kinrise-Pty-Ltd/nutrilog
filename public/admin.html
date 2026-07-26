@@ -152,6 +152,10 @@
   .brand-footer { display: flex; justify-content: center; padding: 16px; }
   .brand-footer img { height: 26px; width: auto; border-radius: 5px; opacity: 0.9; }
 
+  /* Welcome banner */
+  .welcome-banner { padding: 12px 24px; border-bottom: 1px solid var(--border); font-size: 0.85rem; color: var(--text-muted); }
+  .welcome-banner strong { color: var(--text); }
+
   /* Integrations */
   .integrations { padding: 16px 24px; border-bottom: 1px solid var(--border); }
   .integrations-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; margin-bottom: 10px; }
@@ -205,10 +209,12 @@ function escapeHtmlSwitcher(str) {
     <a class="back-link" href="/calendar">📅 Calendar</a>
     <a class="back-link" href="/oura">💍 Oura</a>
     <a class="back-link" href="/health">🍎 Health</a>
-    <a class="back-link" href="/">‹ Back to Log</a>
+    <a class="back-link" href="/">📋 Back to Log</a>
     <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
   </div>
 </div>
+
+<div class="welcome-banner" id="welcomeBanner"></div>
 
 <div class="integrations">
   <div class="integrations-title">Integrations</div>
@@ -227,15 +233,23 @@ function escapeHtmlSwitcher(str) {
 
 <div class="integrations">
   <div class="integrations-title">Delegate Access</div>
-  <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px;max-width:560px;line-height:1.5;">
-    Grant someone else (e.g. an assistant) full access to your own log, catalog, and integration settings —
-    they'll see an account switcher after signing in with their own KinGroup account.
+  <div class="integration-card">
+    <div class="ic-left">
+      <div class="ic-icon">🤝</div>
+      <div>
+        <div class="ic-name">Grant account access</div>
+        <div class="ic-status">
+          Give someone else (e.g. an assistant) full access to your own log, catalog, and integration settings —
+          they'll see an account switcher after signing in with their own KinGroup account.
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <input type="email" id="delegateEmail" class="form-control" placeholder="their.email@kingroup.com.au" style="width:220px;">
+      <button class="btn-oura-connect" id="btnAddDelegate">+ Grant Access</button>
+    </div>
   </div>
   <div id="delegateList"></div>
-  <div style="display:flex;gap:8px;margin-top:10px;">
-    <input type="email" id="delegateEmail" class="form-control" placeholder="their.email@kingroup.com.au" style="max-width:320px;">
-    <button class="btn-sm" id="btnAddDelegate">+ Grant Access</button>
-  </div>
 </div>
 
 <div class="layout">
@@ -684,13 +698,19 @@ async function loadDelegates() {
   const rows = await (await fetch('/api/delegates')).json();
   const list = document.getElementById('delegateList');
   if (rows.length === 0) {
-    list.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">No one else has access to your account yet.</div>';
+    list.innerHTML = '';
     return;
   }
   list.innerHTML = rows.map(r => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:0.85rem;">${escapeHtml(r.delegate_email)}</span>
-      <button class="btn-sm danger" data-del-delegate="${r.id}">Revoke</button>
+    <div class="integration-card" style="margin-top:10px;">
+      <div class="ic-left">
+        <div class="ic-icon">👤</div>
+        <div>
+          <div class="ic-name">${escapeHtml(r.delegate_email)}</div>
+          <div class="ic-status connected">Has full access to your account</div>
+        </div>
+      </div>
+      <button class="btn-oura-disconnect" data-del-delegate="${r.id}">Revoke</button>
     </div>
   `).join('');
   list.querySelectorAll('[data-del-delegate]').forEach(btn => {
@@ -714,7 +734,24 @@ document.getElementById('btnAddDelegate').onclick = async () => {
   loadDelegates();
 };
 
+// ── Welcome banner ───────────────────────────────────────────────────────
+async function loadWelcome() {
+  const me = await (await fetch('/api/me')).json();
+  const el = document.getElementById('welcomeBanner');
+  if (me.acting_as) {
+    const ownerName = escapeHtml(me.display_name || me.email);
+    const realName = escapeHtml(me.real_display_name || me.real_email);
+    el.innerHTML = `Signed in as <strong>${realName}</strong> — viewing <strong>${ownerName}</strong>'s account`;
+  } else {
+    const label = me.display_name && me.display_name !== me.email
+      ? `${escapeHtml(me.display_name)} (${escapeHtml(me.email)})`
+      : escapeHtml(me.email);
+    el.innerHTML = `Signed in as <strong>${label}</strong>`;
+  }
+}
+
 // Init
+loadWelcome();
 loadCategories();
 loadOuraIntegration();
 loadDelegates();
