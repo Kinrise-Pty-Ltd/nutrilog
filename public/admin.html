@@ -229,6 +229,17 @@ function escapeHtmlSwitcher(str) {
     <div id="ouraAction"></div>
   </div>
   <div id="ouraBanner"></div>
+
+  <div class="integration-card" style="margin-top:10px;flex-direction:column;align-items:stretch;">
+    <div class="ic-left" style="margin-bottom:12px;">
+      <div class="ic-icon">🍎</div>
+      <div>
+        <div class="ic-name">iPhone Health</div>
+        <div class="ic-status" id="healthStatus">Checking…</div>
+      </div>
+    </div>
+    <div id="healthSetupDetail"></div>
+  </div>
 </div>
 
 <div class="integrations">
@@ -693,6 +704,74 @@ async function loadOuraIntegration() {
   }
 }
 
+// ── iPhone Health integration ─────────────────────────────────────────────
+async function loadHealthIntegration() {
+  const [tokenInfo, status] = await Promise.all([
+    fetch('/api/health/token').then(r => r.json()),
+    fetch('/api/health/status').then(r => r.json()),
+  ]);
+
+  const statusEl = document.getElementById('healthStatus');
+  if (status.connected) {
+    statusEl.textContent = 'Connected — receiving data from your phone';
+    statusEl.classList.add('connected');
+  } else {
+    statusEl.textContent = 'Not connected yet — showing demo data on the Health page';
+  }
+
+  const detail = document.getElementById('healthSetupDetail');
+  detail.innerHTML = `
+    <div class="ic-status" style="margin-bottom:10px;">
+      Apple doesn't offer a direct cloud link, so this uses a small automation on your phone to push data here on a schedule.
+    </div>
+    <div class="ic-status"><strong>Option A — Health Auto Export app (easiest):</strong></div>
+    <ol class="ic-status" style="margin:4px 0 12px 18px;">
+      <li>In Health Auto Export, create a new Automation → REST API export.</li>
+      <li>Pick the metrics: Steps, Active Energy, Resting Energy, Exercise Minutes, Weight, Resting Heart Rate, Sleep.</li>
+      <li>Set the export URL to the address below.</li>
+      <li>Under Headers, add one: name <code>Authorization</code>, value exactly <code>Bearer &lt;token&gt;</code>
+        (the word "Bearer", one space, then the token below pasted straight in — no extra spaces or line breaks).</li>
+      <li>Set a schedule (e.g. daily) and save.</li>
+    </ol>
+    <div class="ic-status"><strong>Option B — Shortcuts app:</strong></div>
+    <ol class="ic-status" style="margin:4px 0 14px 18px;">
+      <li>Create a new Personal Automation (e.g. daily at 11pm).</li>
+      <li>Add "Get Health Sample" actions for the same metrics as above.</li>
+      <li>Add "Get Contents of URL" — POST to the address below, header <code>Authorization: Bearer &lt;token&gt;</code>, JSON body with a <code>date</code> field plus the values.</li>
+    </ol>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <input readonly id="ingestUrl" class="form-control" value="${tokenInfo.ingest_url}" style="font-family:monospace;font-size:0.78rem;">
+      <button class="btn-sm secondary" id="copyIngestUrl">Copy</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <input readonly id="ingestToken" type="password" class="form-control" value="${tokenInfo.token}" style="font-family:monospace;font-size:0.78rem;">
+      <button class="btn-sm secondary" id="toggleIngestToken">Show</button>
+      <button class="btn-sm secondary" id="copyIngestToken">Copy</button>
+    </div>
+    <button id="regenHealthToken" style="background:none;border:none;color:var(--danger);font-size:0.78rem;cursor:pointer;text-decoration:underline;padding:0;">Regenerate token (invalidates the old one)</button>
+  `;
+
+  document.getElementById('copyIngestUrl').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('ingestUrl').value);
+    showToast('URL copied');
+  };
+  document.getElementById('copyIngestToken').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('ingestToken').value);
+    showToast('Token copied');
+  };
+  document.getElementById('toggleIngestToken').onclick = () => {
+    const input = document.getElementById('ingestToken');
+    input.type = input.type === 'password' ? 'text' : 'password';
+  };
+  document.getElementById('regenHealthToken').onclick = async () => {
+    if (!confirm('This invalidates the current token — any automation using it will need updating. Continue?')) return;
+    const res = await fetch('/api/health/token/regenerate', { method: 'POST' });
+    const data = await res.json();
+    document.getElementById('ingestToken').value = data.token;
+    showToast('New token generated');
+  };
+}
+
 // ── Delegate access ──────────────────────────────────────────────────────
 async function loadDelegates() {
   const rows = await (await fetch('/api/delegates')).json();
@@ -754,6 +833,7 @@ async function loadWelcome() {
 loadWelcome();
 loadCategories();
 loadOuraIntegration();
+loadHealthIntegration();
 loadDelegates();
 </script>
 </body>

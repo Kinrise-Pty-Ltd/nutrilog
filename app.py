@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime
 
 from flask import Flask, g, jsonify, request, send_from_directory, session
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import barcode
 import health
@@ -15,6 +16,14 @@ from db import get_db, init_db
 
 app = Flask(__name__, static_folder='public')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-only-insecure-key')
+
+# Azure App Service terminates TLS at its own front-end and forwards to this
+# container over plain HTTP, setting X-Forwarded-Proto: https on the way —
+# without trusting that header, request.url_root (used to build the iPhone
+# Health ingest URL shown in Admin) reports http even on the live HTTPS site.
+# x_proto=1/x_host=1 trusts exactly one proxy hop, matching Azure's setup —
+# not an unbounded chain.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # Runs at import time (not just `python app.py`) so it also fires under
 # gunicorn, which is how this app actually runs in production (startup.sh).
