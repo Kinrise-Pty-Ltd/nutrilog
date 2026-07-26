@@ -124,11 +124,32 @@ CREATE TABLE dbo.iphone_health_daily (
     weight_kg FLOAT NULL,
     resting_hr INT NULL,
     sleep_minutes INT NULL,
+    spo2_percent FLOAT NULL,
+    hrv_ms FLOAT NULL,
+    body_fat_percent FLOAT NULL,
+    vo2_max FLOAT NULL,
+    distance_km FLOAT NULL,
+    flights_climbed INT NULL,
+    mindful_minutes INT NULL,
+    water_ml INT NULL,
     raw_json NVARCHAR(MAX) NULL,
     is_demo BIT DEFAULT 0,
     synced_at DATETIME2 DEFAULT SYSUTCDATETIME(),
     FOREIGN KEY (user_id) REFERENCES dbo.users(id),
     CONSTRAINT UQ_iphone_health_user_date UNIQUE (user_id, date)
+);
+GO
+
+-- Which OPTIONAL health measures (beyond the always-shown core four —
+-- steps, active energy, weight, sleep) a user has chosen to see on their
+-- Health page. See health.py's METRIC_CATALOG for the full supported set.
+IF OBJECT_ID('dbo.iphone_health_user_metrics', 'U') IS NULL
+CREATE TABLE dbo.iphone_health_user_metrics (
+    user_id NVARCHAR(64) NOT NULL,
+    metric_key NVARCHAR(64) NOT NULL,
+    added_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_iphone_health_user_metrics PRIMARY KEY (user_id, metric_key),
+    FOREIGN KEY (user_id) REFERENCES dbo.users(id)
 );
 GO
 

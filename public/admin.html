@@ -706,9 +706,10 @@ async function loadOuraIntegration() {
 
 // ── iPhone Health integration ─────────────────────────────────────────────
 async function loadHealthIntegration() {
-  const [tokenInfo, status] = await Promise.all([
+  const [tokenInfo, status, metrics] = await Promise.all([
     fetch('/api/health/token').then(r => r.json()),
     fetch('/api/health/status').then(r => r.json()),
+    fetch('/api/health/metrics').then(r => r.json()),
   ]);
 
   const statusEl = document.getElementById('healthStatus');
@@ -749,7 +750,18 @@ async function loadHealthIntegration() {
       <button class="btn-sm secondary" id="copyIngestToken">Copy</button>
     </div>
     <button id="regenHealthToken" style="background:none;border:none;color:var(--danger);font-size:0.78rem;cursor:pointer;text-decoration:underline;padding:0;">Regenerate token (invalidates the old one)</button>
+
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Health Measures</div>
+      <div class="ic-status" style="margin-bottom:10px;">
+        Steps, Active Energy, Weight, and Sleep are always shown. Add any of these others you want tracked too —
+        removing one just stops showing it here, it doesn't delete any data already collected.
+      </div>
+      <div id="healthMetricsList" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+    </div>
   `;
+
+  renderHealthMetricsList(metrics);
 
   document.getElementById('copyIngestUrl').onclick = () => {
     navigator.clipboard.writeText(document.getElementById('ingestUrl').value);
@@ -770,6 +782,29 @@ async function loadHealthIntegration() {
     document.getElementById('ingestToken').value = data.token;
     showToast('New token generated');
   };
+}
+
+function renderHealthMetricsList(metrics) {
+  const list = document.getElementById('healthMetricsList');
+  list.innerHTML = metrics.map(m => `
+    <button class="btn-sm ${m.enabled ? '' : 'secondary'}" data-metric-key="${m.key}" data-metric-enabled="${m.enabled}">
+      ${m.enabled ? '✓' : '+'} ${escapeHtml(m.label)}
+    </button>
+  `).join('');
+
+  list.querySelectorAll('[data-metric-key]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.metricKey;
+      const enabled = btn.dataset.metricEnabled === 'true';
+      if (enabled) {
+        await fetch(`/api/health/metrics/${key}`, { method: 'DELETE' });
+      } else {
+        await fetch('/api/health/metrics', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key }) });
+      }
+      const metrics = await (await fetch('/api/health/metrics')).json();
+      renderHealthMetricsList(metrics);
+    });
+  });
 }
 
 // ── Delegate access ──────────────────────────────────────────────────────

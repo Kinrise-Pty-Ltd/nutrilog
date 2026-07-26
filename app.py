@@ -721,6 +721,30 @@ def health_summary():
     return jsonify({'days': rows, 'demo': is_demo})
 
 
+@app.route('/api/health/metrics', methods=['GET'])
+def health_metrics_list():
+    return jsonify(health.get_available_metrics(g.user['id']))
+
+
+@app.route('/api/health/metrics', methods=['POST'])
+def health_metrics_add():
+    data = request.json or {}
+    key = data.get('key')
+    if not key:
+        return jsonify({'error': 'key is required'}), 400
+    try:
+        health.add_metric(g.user['id'], key)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'added': key}), 201
+
+
+@app.route('/api/health/metrics/<key>', methods=['DELETE'])
+def health_metrics_remove(key):
+    health.remove_metric(g.user['id'], key)
+    return jsonify({'removed': key})
+
+
 @app.route('/api/health/ingest', methods=['POST'])
 def health_ingest():
     """Called by a Shortcuts automation / Health Auto Export, authenticated

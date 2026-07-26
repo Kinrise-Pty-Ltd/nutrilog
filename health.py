@@ -14,17 +14,42 @@ from datetime import date, timedelta
 
 from db import get_db
 
-FIELDS = [
-    'steps', 'active_energy_kcal', 'resting_energy_kcal',
-    'exercise_minutes', 'weight_kg', 'resting_hr', 'sleep_minutes',
-]
+# Always shown on the Health page, for every user.
+CORE_FIELDS = ['steps', 'active_energy_kcal', 'weight_kg', 'sleep_minutes']
+
+# Opt-in: a user adds/removes these individually from Admin (see
+# get_available_metrics()/add_metric()/remove_metric()) — resting energy,
+# exercise minutes, and resting HR were already being collected here before
+# this was configurable, just never surfaced; the rest are new.
+METRIC_CATALOG = {
+    'resting_energy_kcal': {'label': 'Resting Energy', 'unit': 'kcal', 'decimals': 0, 'demo_range': (1500, 2000), 'salt': 3},
+    'exercise_minutes': {'label': 'Exercise Minutes', 'unit': 'min', 'decimals': 0, 'demo_range': (10, 60), 'salt': 4},
+    'resting_hr': {'label': 'Resting Heart Rate', 'unit': 'bpm', 'decimals': 0, 'demo_range': (52, 68), 'salt': 6},
+    'spo2_percent': {'label': 'Blood Oxygen (SpO2)', 'unit': '%', 'decimals': 1, 'demo_range': (95.5, 98.5), 'salt': 8},
+    'hrv_ms': {'label': 'Heart Rate Variability', 'unit': 'ms', 'decimals': 0, 'demo_range': (28, 75), 'salt': 9},
+    'body_fat_percent': {'label': 'Body Fat %', 'unit': '%', 'decimals': 1, 'demo_range': (15, 28), 'salt': 10},
+    'vo2_max': {'label': 'VO2 Max', 'unit': 'ml/kg/min', 'decimals': 1, 'demo_range': (32, 48), 'salt': 11},
+    'distance_km': {'label': 'Distance', 'unit': 'km', 'decimals': 1, 'demo_range': (2, 9), 'salt': 12},
+    'flights_climbed': {'label': 'Flights Climbed', 'unit': 'floors', 'decimals': 0, 'demo_range': (2, 15), 'salt': 13},
+    'mindful_minutes': {'label': 'Mindful Minutes', 'unit': 'min', 'decimals': 0, 'demo_range': (0, 20), 'salt': 14},
+    'water_ml': {'label': 'Water Intake', 'unit': 'ml', 'decimals': 0, 'demo_range': (500, 2500), 'salt': 15},
+}
+OPTIONAL_FIELDS = list(METRIC_CATALOG.keys())
+FIELDS = CORE_FIELDS + OPTIONAL_FIELDS
+
+# Fields where the collected value is naturally fractional (rounded to 1
+# decimal on ingest) rather than a whole number.
+ONE_DECIMAL_FIELDS = {'weight_kg', 'spo2_percent', 'body_fat_percent', 'vo2_max', 'distance_km'}
 
 # Health Auto Export's REST API export has its own fixed JSON shape
 # ({"data": {"metrics": [{"name": ..., "data": [{"date": ..., "qty": ...}]}]}})
 # unlike a Shortcuts automation, where you build the request body yourself
 # and can match our flat shape directly. Metric names are HealthKit
 # identifiers in snake_case; a few historical aliases are included
-# defensively since exact naming has varied across app versions.
+# defensively since exact naming (and units for a couple of these — SpO2
+# and body fat in particular, which some exports report as a 0-1 fraction
+# rather than a percentage) has varied across app versions and hasn't been
+# verified against a live export.
 HEALTH_AUTO_EXPORT_METRIC_FIELDS = {
     'step_count': 'steps',
     'steps': 'steps',
@@ -39,8 +64,26 @@ HEALTH_AUTO_EXPORT_METRIC_FIELDS = {
     'weight': 'weight_kg',
     'resting_heart_rate': 'resting_hr',
     'heart_rate_resting': 'resting_hr',
+    'blood_oxygen_saturation': 'spo2_percent',
+    'oxygen_saturation': 'spo2_percent',
+    'blood_oxygen': 'spo2_percent',
+    'heart_rate_variability': 'hrv_ms',
+    'heart_rate_variability_sdnn': 'hrv_ms',
+    'body_fat_percentage': 'body_fat_percent',
+    'body_fat': 'body_fat_percent',
+    'vo2_max': 'vo2_max',
+    'walking_running_distance': 'distance_km',
+    'distance_walking_running': 'distance_km',
+    'flights_climbed': 'flights_climbed',
+    'mindful_minutes': 'mindful_minutes',
+    'mindful_session': 'mindful_minutes',
+    'dietary_water': 'water_ml',
+    'water': 'water_ml',
 }
 HEALTH_AUTO_EXPORT_SLEEP_METRICS = {'sleep_analysis', 'sleep'}
+# Reported as a 0-1 fraction by some Health Auto Export versions rather
+# than a 0-100 percentage — normalized up if so.
+FRACTION_OR_PERCENT_FIELDS = {'spo2_percent', 'body_fat_percent'}
 
 
 def get_or_create_token(user_id):
@@ -81,6 +124,46 @@ def is_connected(user_id):
             "SELECT id FROM iphone_health_daily WHERE user_id=? AND is_demo=0", (user_id,)
         ) is not None
 
+
+# ── Optional metric management ────────────────────────────────────────────
+
+def get_available_metrics(user_id):
+    """Full optional catalog, each flagged with whether this user has added
+    it to their Health page."""
+    with get_db() as db:
+        enabled = {r['metric_key'] for r in db.query(
+            "SELECT metric_key FROM iphone_health_user_metrics WHERE user_id=?", (user_id,)
+        )}
+    return [
+        {'key': key, 'label': meta['label'], 'unit': meta['unit'], 'decimals': meta['decimals'], 'enabled': key in enabled}
+        for key, meta in METRIC_CATALOG.items()
+    ]
+
+
+def get_enabled_metric_keys(user_id):
+    with get_db() as db:
+        return [r['metric_key'] for r in db.query(
+            "SELECT metric_key FROM iphone_health_user_metrics WHERE user_id=?", (user_id,)
+        )]
+
+
+def add_metric(user_id, key):
+    if key not in METRIC_CATALOG:
+        raise ValueError(f'Unknown metric: {key}')
+    with get_db() as db:
+        existing = db.query_one(
+            "SELECT 1 AS x FROM iphone_health_user_metrics WHERE user_id=? AND metric_key=?", (user_id, key)
+        )
+        if not existing:
+            db.execute("INSERT INTO iphone_health_user_metrics (user_id, metric_key) VALUES (?,?)", (user_id, key))
+
+
+def remove_metric(user_id, key):
+    with get_db() as db:
+        db.execute("DELETE FROM iphone_health_user_metrics WHERE user_id=? AND metric_key=?", (user_id, key))
+
+
+# ── Ingest ─────────────────────────────────────────────────────────────────
 
 def _one_day(payload):
     day = payload.get('date')
@@ -131,7 +214,9 @@ def _parse_health_auto_export(payload):
             else:
                 qty = point.get('qty')
                 if qty is not None:
-                    record[field] = round(qty, 1) if field == 'weight_kg' else round(qty)
+                    if field in FRACTION_OR_PERCENT_FIELDS and qty <= 1:
+                        qty *= 100
+                    record[field] = round(qty, 1) if field in ONE_DECIMAL_FIELDS else round(qty)
 
     if unrecognized:
         print(f'[health.ingest] Unrecognized Health Auto Export metric name(s): {sorted(unrecognized)}')
@@ -155,35 +240,33 @@ def ingest(user_id, payload):
         for entry in entries:
             day, values = _one_day(entry)
             db.execute("DELETE FROM iphone_health_daily WHERE user_id=? AND date=?", (user_id, day))
-            db.execute(
-                """INSERT INTO iphone_health_daily
-                   (id, user_id, date, steps, active_energy_kcal, resting_energy_kcal,
-                    exercise_minutes, weight_kg, resting_hr, sleep_minutes, raw_json, is_demo)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
-                (str(uuid.uuid4()), user_id, day, values['steps'], values['active_energy_kcal'],
-                 values['resting_energy_kcal'], values['exercise_minutes'], values['weight_kg'],
-                 values['resting_hr'], values['sleep_minutes'], json.dumps(entry))
-            )
+            cols = ['id', 'user_id', 'date'] + FIELDS + ['raw_json', 'is_demo']
+            placeholders = ','.join(['?'] * len(cols))
+            params = [str(uuid.uuid4()), user_id, day] + [values[f] for f in FIELDS] + [json.dumps(entry), 0]
+            db.execute(f"INSERT INTO iphone_health_daily ({','.join(cols)}) VALUES ({placeholders})", params)
     return len(entries)
 
 
 def _demo_day(user_id, day):
     seed = int(hashlib.sha256(f'health:{user_id}:{day.isoformat()}'.encode()).hexdigest()[:8], 16)
 
-    def pick(lo, hi, salt):
-        return lo + (seed ^ salt) % (hi - lo + 1)
+    def pick(lo, hi, salt, decimals=0):
+        span = int((hi - lo) * (10 ** decimals))
+        return round(lo + ((seed ^ salt) % (span + 1)) / (10 ** decimals), decimals) if decimals else \
+            lo + (seed ^ salt) % (hi - lo + 1)
 
-    return {
+    day_data = {
         'date': day.isoformat(),
         'steps': pick(4000, 13000, 1),
         'active_energy_kcal': pick(300, 900, 2),
-        'resting_energy_kcal': pick(1500, 2000, 3),
-        'exercise_minutes': pick(10, 60, 4),
         'weight_kg': round(78 + (pick(0, 40, 5) - 20) / 10, 1),
-        'resting_hr': pick(52, 68, 6),
         'sleep_minutes': pick(360, 480, 7),
         'is_demo': True,
     }
+    for key, meta in METRIC_CATALOG.items():
+        lo, hi = meta['demo_range']
+        day_data[key] = pick(lo, hi, meta['salt'], meta['decimals'])
+    return day_data
 
 
 def demo_summary(user_id, days=30):
@@ -194,9 +277,9 @@ def demo_summary(user_id, days=30):
 def get_summary(user_id, days=30):
     if is_connected(user_id):
         with get_db() as db:
+            cols = ', '.join(['date'] + FIELDS)
             rows = db.query(
-                """SELECT date, steps, active_energy_kcal, resting_energy_kcal,
-                   exercise_minutes, weight_kg, resting_hr, sleep_minutes, 0 as is_demo
+                f"""SELECT {cols}, 0 as is_demo
                    FROM iphone_health_daily
                    WHERE user_id=? AND date >= ?
                    ORDER BY date""",

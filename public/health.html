@@ -149,16 +149,34 @@ function avg(arr) {
 }
 
 async function loadHealth() {
-  const summary = await (await fetch('/api/health/summary?days=30')).json();
-  renderStats(summary);
+  const [summary, metrics] = await Promise.all([
+    fetch('/api/health/summary?days=30').then(r => r.json()),
+    fetch('/api/health/metrics').then(r => r.json()),
+  ]);
+  renderStats(summary, metrics.filter(m => m.enabled));
 }
 
-function renderStats(summary) {
+const EXTRA_CARD_COLORS = ['var(--accent)', 'var(--warn)', 'var(--accent2)', 'var(--danger)'];
+
+function renderStats(summary, enabledMetrics) {
   const days = summary.days;
   const steps = days.map(d => d.steps);
   const activeEnergy = days.map(d => d.active_energy_kcal);
   const weight = days.map(d => d.weight_kg);
   const sleep = days.map(d => d.sleep_minutes);
+
+  const extraCards = enabledMetrics.map((m, i) => {
+    const values = days.map(d => d[m.key]);
+    const average = avg(values);
+    const display = average === null ? '—' : m.decimals ? average.toFixed(m.decimals) : Math.round(average);
+    return `
+      <div class="stat-card">
+        <div class="label">${m.label} <span class="unit">${m.unit}</span></div>
+        <div class="value">${display}</div>
+        ${sparkline(values, EXTRA_CARD_COLORS[i % EXTRA_CARD_COLORS.length])}
+      </div>
+    `;
+  }).join('');
 
   const html = `
     ${summary.demo ? '<div class="banner"><strong>Demo data</strong> — set up the connection in Admin to see your real stats.</div>' : ''}
@@ -183,6 +201,7 @@ function renderStats(summary) {
         <div class="value">${avg(sleep) !== null ? (avg(sleep) / 60).toFixed(1) : '—'}</div>
         ${sparkline(sleep, 'var(--danger)')}
       </div>
+      ${extraCards}
     </div>
   `;
   document.getElementById('mainContent').insertAdjacentHTML('beforeend', html);
