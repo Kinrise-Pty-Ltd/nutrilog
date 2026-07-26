@@ -82,6 +82,7 @@ def init_db():
 
     _migrate_columns('oura_daily', OURA_DAILY_NEW_COLUMNS)
     _migrate_columns('food_items', FOOD_ITEMS_NEW_COLUMNS)
+    _migrate_columns('iphone_health_daily', IPHONE_HEALTH_NEW_COLUMNS)
     _ensure_index('idx_food_items_barcode', 'food_items', 'barcode')
     _migrate_catalog_to_per_user()
     _ensure_index('idx_categories_user', 'categories', 'user_id')
@@ -107,6 +108,17 @@ OURA_DAILY_NEW_COLUMNS = {
 
 FOOD_ITEMS_NEW_COLUMNS = {
     'barcode': {'sqlite': 'TEXT', 'mssql': 'NVARCHAR(64)'},
+}
+
+IPHONE_HEALTH_NEW_COLUMNS = {
+    'spo2_percent': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'hrv_ms': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'body_fat_percent': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'vo2_max': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'distance_km': {'sqlite': 'REAL', 'mssql': 'FLOAT'},
+    'flights_climbed': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'mindful_minutes': {'sqlite': 'INTEGER', 'mssql': 'INT'},
+    'water_ml': {'sqlite': 'INTEGER', 'mssql': 'INT'},
 }
 
 

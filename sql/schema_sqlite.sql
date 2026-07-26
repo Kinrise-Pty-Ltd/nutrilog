@@ -109,11 +109,30 @@ CREATE TABLE IF NOT EXISTS iphone_health_daily (
     weight_kg REAL,
     resting_hr INTEGER,
     sleep_minutes INTEGER,
+    spo2_percent REAL,
+    hrv_ms REAL,
+    body_fat_percent REAL,
+    vo2_max REAL,
+    distance_km REAL,
+    flights_climbed INTEGER,
+    mindful_minutes INTEGER,
+    water_ml INTEGER,
     raw_json TEXT,
     is_demo INTEGER DEFAULT 0,
     synced_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE (user_id, date)
+);
+
+-- Which OPTIONAL health measures (beyond the always-shown core four —
+-- steps, active energy, weight, sleep) a user has chosen to see on their
+-- Health page. See health.py's METRIC_CATALOG for the full supported set.
+CREATE TABLE IF NOT EXISTS iphone_health_user_metrics (
+    user_id TEXT NOT NULL,
+    metric_key TEXT NOT NULL,
+    added_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, metric_key),
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 -- Self-service delegation: an owner grants their own account's data/config
