@@ -109,6 +109,10 @@
   .log-entry-cals { font-size: 0.9rem; font-weight: 700; color: var(--accent); margin-right: 10px; }
   .btn-remove { background: none; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
   .btn-remove:active { color: var(--danger); }
+  .btn-move { background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+  .btn-move:active { color: var(--accent); }
+  .move-option { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 0.9rem; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 10px; }
+  .move-option:active { border-color: var(--accent); }
 
   .add-food-btn { width: 100%; background: var(--surface2); border: 1px dashed var(--border); color: var(--text-dim); border-radius: var(--radius-sm); padding: 10px; font-size: 0.85rem; cursor: pointer; text-align: center; }
   .add-food-btn:active { background: var(--border); }
@@ -313,6 +317,42 @@ function escapeHtmlSwitcher(str) {
   </div>
 </div>
 
+<!-- Quick-add-new-food modal (search/voice dead-end) -->
+<div class="qty-modal" id="quickAddModal">
+  <div class="qty-card">
+    <div class="qty-title">Add a new food item</div>
+    <div class="qty-subtitle">Added to your own catalog under <strong id="quickAddSlotName"></strong>.</div>
+    <div style="text-align:left;">
+      <label style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Name</label>
+      <input type="text" id="quickAddName" class="search-input" style="width:100%;margin:4px 0 12px;">
+      <div style="display:flex;gap:10px;margin-bottom:12px;">
+        <div style="flex:1;">
+          <label style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Serving size</label>
+          <input type="text" id="quickAddServing" class="search-input" placeholder="e.g. 200" style="width:100%;margin-top:4px;">
+        </div>
+        <div style="width:80px;">
+          <label style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Unit</label>
+          <input type="text" id="quickAddUnit" class="search-input" value="g" style="width:100%;margin-top:4px;">
+        </div>
+      </div>
+      <label style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Calories (per serving)</label>
+      <input type="number" id="quickAddCalories" class="search-input" style="width:100%;margin:4px 0 16px;">
+    </div>
+    <button class="btn-confirm" id="quickAddConfirm">Add &amp; Log</button>
+    <button class="btn-cancel" id="quickAddCancel">Cancel</button>
+  </div>
+</div>
+
+<!-- Move-to-another-meal modal -->
+<div class="qty-modal" id="moveModal">
+  <div class="qty-card">
+    <div class="qty-title">Move to…</div>
+    <div class="qty-subtitle" id="moveItemName"></div>
+    <div id="moveCatList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;"></div>
+    <button class="btn-cancel" id="moveCancel">Cancel</button>
+  </div>
+</div>
+
 <!-- Quantity modal -->
 <div class="qty-modal" id="qtyModal">
   <div class="qty-card">
@@ -440,6 +480,7 @@ function renderSlots() {
                   <div class="log-entry-meta">${e.quantity > 1 ? e.quantity + '× ' : ''}${escapeHtml(e.serving_size)}${escapeHtml(e.serving_unit)}</div>
                 </div>
                 <span class="log-entry-cals">${e.calories_actual} kcal</span>
+                <button class="btn-move" data-lid="${e.id}" title="Move to another meal">⇄</button>
                 <button class="btn-remove" data-lid="${e.id}">✕</button>
               </div>
             `).join('')}
@@ -458,6 +499,13 @@ function renderSlots() {
         e.stopPropagation();
         await fetch(`/api/log/${btn.dataset.lid}`, { method: 'DELETE' });
         refresh();
+      });
+    });
+
+    card.querySelectorAll('.btn-move').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMoveModal(btn.dataset.lid);
       });
     });
 
@@ -489,7 +537,15 @@ function renderFoodList(query) {
   );
 
   if (filtered.length === 0) {
-    list.innerHTML = '<div class="empty-hint">No items found</div>';
+    if (query) {
+      list.innerHTML = `
+        <div class="empty-hint">No items found for "${escapeHtml(query)}"</div>
+        <button class="add-food-btn" id="quickAddTrigger">+ Add "${escapeHtml(query)}" as a new food item</button>
+      `;
+      document.getElementById('quickAddTrigger').addEventListener('click', () => openQuickAddModal(query));
+    } else {
+      list.innerHTML = '<div class="empty-hint">No items found</div>';
+    }
     return;
   }
 
@@ -520,6 +576,88 @@ function renderFoodList(query) {
     });
   });
 }
+
+// ── Quick-add a new food item (search/voice dead-end) ─────────────────────
+function openQuickAddModal(query) {
+  const cat = categories.find(c => c.id === currentSlot);
+  document.getElementById('quickAddSlotName').textContent = cat ? cat.name : 'this meal';
+  document.getElementById('quickAddName').value = query;
+  document.getElementById('quickAddServing').value = '';
+  document.getElementById('quickAddUnit').value = 'g';
+  document.getElementById('quickAddCalories').value = '';
+  document.getElementById('foodModal').classList.remove('open');
+  document.getElementById('quickAddModal').classList.add('open');
+  setTimeout(() => document.getElementById('quickAddServing').focus(), 100);
+}
+
+document.getElementById('quickAddConfirm').onclick = async () => {
+  const name = document.getElementById('quickAddName').value.trim();
+  const servingSize = document.getElementById('quickAddServing').value.trim();
+  const servingUnit = document.getElementById('quickAddUnit').value.trim() || 'g';
+  const calories = parseInt(document.getElementById('quickAddCalories').value, 10);
+
+  if (!name || !servingSize || !Number.isFinite(calories)) {
+    alert('Please fill in name, serving size, and calories.');
+    return;
+  }
+
+  const res = await fetch('/api/food-items', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category_id: currentSlot, name, serving_size: servingSize,
+      serving_unit: servingUnit, calories
+    })
+  });
+  if (!res.ok) { alert((await res.json()).error || 'Could not add food item'); return; }
+  const newItem = await res.json();
+  allFoods.push(newItem);
+  document.getElementById('quickAddModal').classList.remove('open');
+  openQtyModal(newItem);
+};
+
+document.getElementById('quickAddCancel').onclick = () => {
+  document.getElementById('quickAddModal').classList.remove('open');
+  document.getElementById('foodModal').classList.add('open');
+};
+
+// ── Move a logged entry to a different meal slot ──────────────────────────
+// For food logged after the fact under the wrong meal ("had this 2 hours
+// ago, only entering it now") — doesn't touch quantity or the food item
+// itself, just re-files it under a different category.
+let moveEntryId = null;
+
+function openMoveModal(entryId) {
+  const entry = logEntries.find(e => e.id === entryId);
+  if (!entry) return;
+  moveEntryId = entryId;
+
+  document.getElementById('moveItemName').textContent = entry.food_name;
+  const list = document.getElementById('moveCatList');
+  list.innerHTML = categories
+    .filter(c => c.id !== entry.meal_slot)
+    .map(c => `<button class="move-option" data-cat="${c.id}"><span>${escapeHtml(c.icon)}</span><span>${escapeHtml(c.name)}</span></button>`)
+    .join('');
+
+  list.querySelectorAll('[data-cat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const targetSlot = btn.dataset.cat;
+      const res = await fetch(`/api/log/${moveEntryId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meal_slot: targetSlot })
+      });
+      if (!res.ok) { alert((await res.json()).error || 'Could not move item'); return; }
+      document.getElementById('moveModal').classList.remove('open');
+      openSlots.add(targetSlot);
+      refresh();
+    });
+  });
+
+  document.getElementById('moveModal').classList.add('open');
+}
+
+document.getElementById('moveCancel').onclick = () => document.getElementById('moveModal').classList.remove('open');
 
 document.getElementById('searchInput').addEventListener('input', e => renderFoodList(e.target.value));
 document.getElementById('closeModal').onclick = () => document.getElementById('foodModal').classList.remove('open');
@@ -752,24 +890,32 @@ function escapeRegex(str) {
 function detectVoiceSlot(text) {
   const lower = text.toLowerCase();
 
-  // 1. Direct match against the user's own category names — always wins,
-  // since these are exactly what the user would actually say.
-  for (const cat of categories) {
-    const name = cat.name.toLowerCase();
-    const re = new RegExp(`\\b${escapeRegex(name)}\\b`);
-    if (re.test(lower)) return { catId: cat.id, matchedText: name };
+  // Flatten to one candidate list: the user's own category names first
+  // (exact vocabulary), then common synonyms mapped to whichever of their
+  // categories contains that canonical word (handles renamed/custom
+  // catalogs too).
+  const candidates = categories.map(cat => ({ name: cat.name.toLowerCase(), catId: cat.id }));
+  for (const [canonical, synonyms] of Object.entries(VOICE_MEAL_KEYWORDS)) {
+    const cat = categories.find(c => c.name.toLowerCase().includes(canonical));
+    if (!cat) continue;
+    for (const syn of synonyms) candidates.push({ name: syn, catId: cat.id });
   }
 
-  // 2. Common synonyms, matched against whichever category name contains
-  // that keyword's canonical word (handles e.g. renamed/custom catalogs).
-  for (const [canonical, synonyms] of Object.entries(VOICE_MEAL_KEYWORDS)) {
-    for (const syn of synonyms) {
-      const re = new RegExp(`\\b${escapeRegex(syn)}\\b`);
-      if (re.test(lower)) {
-        const cat = categories.find(c => c.name.toLowerCase().includes(canonical));
-        if (cat) return { catId: cat.id, matchedText: syn };
-      }
-    }
+  // 1. Highest confidence: a meal word explicitly introduced by "for"/"at"
+  // ("...for lunch", "...at breakfast") — this is how people actually say
+  // which meal something belongs to, and must win even when an earlier
+  // word in the sentence happens to contain a meal name too (e.g. "a
+  // breakfast burrito for lunch" — the food is a "breakfast burrito", but
+  // the meal is lunch).
+  for (const { name, catId } of candidates) {
+    const re = new RegExp(`\\b(?:for|at)\\s+${escapeRegex(name)}\\b`);
+    if (re.test(lower)) return { catId, matchedText: name, viaConnector: true };
+  }
+
+  // 2. Otherwise, any mention anywhere in the sentence.
+  for (const { name, catId } of candidates) {
+    const re = new RegExp(`\\b${escapeRegex(name)}\\b`);
+    if (re.test(lower)) return { catId, matchedText: name, viaConnector: false };
   }
 
   // 3. Nothing said about it — guess from time of day.
@@ -792,7 +938,10 @@ function parseVoiceTranscript(rawText) {
   let text = rawText.trim();
   const slotResult = detectVoiceSlot(text);
   if (slotResult.matchedText) {
-    text = text.replace(new RegExp(`\\b${escapeRegex(slotResult.matchedText)}\\b`, 'i'), '').trim();
+    const pattern = slotResult.viaConnector
+      ? `\\b(?:for|at)\\s+${escapeRegex(slotResult.matchedText)}\\b`
+      : `\\b${escapeRegex(slotResult.matchedText)}\\b`;
+    text = text.replace(new RegExp(pattern, 'i'), '').trim();
   }
   text = text.replace(/\b(?:for|at)\s*$/i, '').trim();
 
@@ -901,12 +1050,17 @@ function finishVoiceCapture(transcript) {
   document.getElementById('searchInput').value = cleanQuery;
   renderFoodList(cleanQuery);
 
+  // Set once here rather than only on a confident match, so whichever path
+  // eventually reaches openQtyModal — an auto-match, a manual pick from the
+  // fallback search list, or a freshly quick-added item — still honors the
+  // amount actually said.
+  voicePendingQty = quantity;
+
   const matches = matchFoodsForVoice(cleanQuery);
   const confident = matches.length > 0 && matches[0].score >= 0.6 &&
     (matches.length === 1 || matches[0].score - matches[1].score >= 0.25);
 
   if (confident) {
-    voicePendingQty = quantity;
     openQtyModal(matches[0].item);
   } else {
     document.getElementById('foodModal').classList.add('open');
