@@ -68,12 +68,18 @@
   .banner { background: var(--surface2); border: 1px dashed var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; font-size: 0.85rem; color: var(--text-dim); }
   .banner strong { color: var(--text); }
 
+  .range-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .range-tab { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim); border-radius: 10px; padding: 9px 0; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+  .range-tab.active { background: var(--accent); color: #0f1117; border-color: var(--accent); }
+
   .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
   .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   .stat-card .label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
   .stat-card .value { font-size: 1.6rem; font-weight: 800; }
   .stat-card .unit { font-size: 0.8rem; color: var(--text-muted); font-weight: 400; }
-  .stat-card svg { width: 100%; height: 32px; margin-top: 8px; display: block; }
+  .stat-card svg { width: 100%; height: 32px; margin-top: 8px; display: block; touch-action: none; }
+  .stat-card .range-caption { font-size: 0.68rem; color: var(--text-muted); margin-top: 6px; }
+  .chart-tooltip { position: fixed; display: none; background: var(--text); color: var(--bg); font-size: 0.72rem; font-weight: 600; padding: 4px 8px; border-radius: 6px; pointer-events: none; z-index: 500; white-space: nowrap; transform: translate(-50%, -100%); }
 
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: flex; z-index: 100; }
   .nav-item { flex: 1; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; text-decoration: none; color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -116,7 +122,15 @@ function escapeHtmlSwitcher(str) {
   <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
 </div>
 
-<div class="main-content" id="mainContent">Loading…</div>
+<div class="main-content">
+  <div class="range-tabs" id="rangeTabs">
+    <button class="range-tab" data-days="7">7 Days</button>
+    <button class="range-tab active" data-days="30">30 Days</button>
+    <button class="range-tab" data-days="90">90 Days</button>
+  </div>
+  <div id="healthResults">Loading…</div>
+</div>
+<div class="chart-tooltip" id="chartTooltip"></div>
 <div class="brand-footer"><img src="/public/assets/KingroupLogo.jpg" alt="Kin Group"></div>
 
 <nav class="bottom-nav">
@@ -128,18 +142,9 @@ function escapeHtmlSwitcher(str) {
 </nav>
 
 <script>
-function sparkline(values, color) {
-  const vals = values.filter(v => v !== null && v !== undefined);
-  if (vals.length === 0) return '';
-  const w = 300, h = 32;
-  const max = Math.max(...vals), min = Math.min(...vals);
-  const range = (max - min) || 1;
-  const points = vals.map((v, i) => {
-    const x = (i / (vals.length - 1 || 1)) * w;
-    const y = h - ((v - min) / range) * h;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+function formatVal(v, decimals) {
+  if (v === null || v === undefined) return '—';
+  return decimals ? v.toFixed(decimals) : Math.round(v);
 }
 
 function avg(arr) {
@@ -148,9 +153,62 @@ function avg(arr) {
   return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
 }
 
+// Card spec -> <svg> with an id, so a tooltip listener can be wired to it
+// after the HTML is inserted (innerHTML doesn't carry over JS bindings).
+function sparklineSvg(id, values, color) {
+  const vals = values.filter(v => v !== null && v !== undefined);
+  if (vals.length === 0) return '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:8px;">No data yet</div>';
+  const w = 300, h = 32;
+  const max = Math.max(...vals), min = Math.min(...vals);
+  const range = (max - min) || 1;
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1 || 1)) * w;
+    return v === null || v === undefined ? null : { x, y: h - ((v - min) / range) * h };
+  });
+  const polyline = points.filter(p => p).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" id="${id}" class="sparkline"><polyline points="${polyline}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function rangeCaption(values, unit, decimals) {
+  const vals = values.filter(v => v !== null && v !== undefined);
+  if (!vals.length) return '';
+  const lo = formatVal(Math.min(...vals), decimals);
+  const hi = formatVal(Math.max(...vals), decimals);
+  return `<div class="range-caption">Low ${lo} · High ${hi}${unit ? ' ' + unit : ''}</div>`;
+}
+
+// Pointer events (mouse + touch + pen in one) — finds the nearest data point
+// to the pointer's X position along the sparkline and shows its date/value
+// in a small floating tooltip, since the SVG has no built-in hit-testing
+// of its own for a single polyline.
+function attachSparklineTooltip(svgEl, dates, values, unit, decimals) {
+  if (!svgEl) return;
+  const tooltip = document.getElementById('chartTooltip');
+
+  function showAt(clientX, clientY) {
+    const rect = svgEl.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const idx = Math.round(ratio * (values.length - 1));
+    const v = values[idx];
+    if (v === null || v === undefined) { tooltip.style.display = 'none'; return; }
+    const label = new Date(dates[idx] + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+    tooltip.textContent = `${label}: ${formatVal(v, decimals)}${unit ? ' ' + unit : ''}`;
+    tooltip.style.display = 'block';
+    tooltip.style.left = clientX + 'px';
+    tooltip.style.top = (clientY - 12) + 'px';
+  }
+
+  svgEl.addEventListener('pointermove', e => showAt(e.clientX, e.clientY));
+  svgEl.addEventListener('pointerdown', e => showAt(e.clientX, e.clientY));
+  svgEl.addEventListener('pointerleave', () => { tooltip.style.display = 'none'; });
+}
+
+let currentDays = 30;
+
 async function loadHealth() {
   const [summary, metrics] = await Promise.all([
-    fetch('/api/health/summary?days=30').then(r => r.json()),
+    fetch(`/api/health/summary?days=${currentDays}`).then(r => r.json()),
     fetch('/api/health/metrics').then(r => r.json()),
   ]);
   renderStats(summary, metrics.filter(m => m.enabled));
@@ -160,54 +218,66 @@ const EXTRA_CARD_COLORS = ['var(--accent)', 'var(--warn)', 'var(--accent2)', 'va
 
 function renderStats(summary, enabledMetrics) {
   const days = summary.days;
-  const steps = days.map(d => d.steps);
-  const activeEnergy = days.map(d => d.active_energy_kcal);
-  const weight = days.map(d => d.weight_kg);
-  const sleep = days.map(d => d.sleep_minutes);
+  const dates = days.map(d => d.date);
 
-  const extraCards = enabledMetrics.map((m, i) => {
-    const values = days.map(d => d[m.key]);
-    const average = avg(values);
-    const display = average === null ? '—' : m.decimals ? average.toFixed(m.decimals) : Math.round(average);
-    return `
-      <div class="stat-card">
-        <div class="label">${m.label} <span class="unit">${m.unit}</span></div>
-        <div class="value">${display}</div>
-        ${sparkline(values, EXTRA_CARD_COLORS[i % EXTRA_CARD_COLORS.length])}
-      </div>
-    `;
-  }).join('');
+  // Core cards, always shown, plus one per enabled optional metric.
+  const cards = [
+    { id: 'spark-steps', label: 'Steps', unit: 'avg/day', color: 'var(--accent)', values: days.map(d => d.steps), decimals: 0 },
+    { id: 'spark-active_energy_kcal', label: 'Active Energy', unit: 'kcal', color: 'var(--warn)', values: days.map(d => d.active_energy_kcal), decimals: 0 },
+    { id: 'spark-weight_kg', label: 'Weight', unit: 'kg', color: 'var(--accent2)', values: days.map(d => d.weight_kg), decimals: 1 },
+    {
+      id: 'spark-sleep_minutes', label: 'Sleep', unit: 'hrs/night', color: 'var(--danger)',
+      values: days.map(d => d.sleep_minutes), decimals: 0,
+      displayOverride: v => v === null ? '—' : (v / 60).toFixed(1),
+      // Sparkline shape is unit-invariant (min/max normalization cancels the
+      // /60), but the caption/tooltip should match the hrs/night shown above.
+      tooltipValues: days.map(d => (d.sleep_minutes === null || d.sleep_minutes === undefined) ? null : d.sleep_minutes / 60),
+      tooltipUnit: 'hrs', tooltipDecimals: 1,
+    },
+    ...enabledMetrics.map((m, i) => ({
+      id: `spark-${m.key}`, label: m.label, unit: m.unit,
+      color: EXTRA_CARD_COLORS[i % EXTRA_CARD_COLORS.length],
+      values: days.map(d => d[m.key]), decimals: m.decimals,
+    })),
+  ];
 
   const html = `
     ${summary.demo ? '<div class="banner"><strong>Demo data</strong> — set up the connection in Admin to see your real stats.</div>' : ''}
     <div class="card-grid">
-      <div class="stat-card">
-        <div class="label">Steps <span class="unit">avg/day</span></div>
-        <div class="value">${avg(steps) ?? '—'}</div>
-        ${sparkline(steps, 'var(--accent)')}
-      </div>
-      <div class="stat-card">
-        <div class="label">Active Energy <span class="unit">kcal</span></div>
-        <div class="value">${avg(activeEnergy) ?? '—'}</div>
-        ${sparkline(activeEnergy, 'var(--warn)')}
-      </div>
-      <div class="stat-card">
-        <div class="label">Weight <span class="unit">kg</span></div>
-        <div class="value">${avg(weight) ?? '—'}</div>
-        ${sparkline(weight, 'var(--accent2)')}
-      </div>
-      <div class="stat-card">
-        <div class="label">Sleep <span class="unit">hrs/night</span></div>
-        <div class="value">${avg(sleep) !== null ? (avg(sleep) / 60).toFixed(1) : '—'}</div>
-        ${sparkline(sleep, 'var(--danger)')}
-      </div>
-      ${extraCards}
+      ${cards.map(c => {
+        const average = avg(c.values);
+        const display = c.displayOverride ? c.displayOverride(average) : formatVal(average, c.decimals);
+        const tooltipValues = c.tooltipValues ?? c.values;
+        const tooltipUnit = c.tooltipUnit ?? c.unit;
+        const tooltipDecimals = c.tooltipDecimals ?? c.decimals;
+        return `
+          <div class="stat-card">
+            <div class="label">${c.label} <span class="unit">${c.unit}</span></div>
+            <div class="value">${display}</div>
+            ${sparklineSvg(c.id, c.values, c.color)}
+            ${rangeCaption(tooltipValues, tooltipUnit, tooltipDecimals)}
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
-  document.getElementById('mainContent').insertAdjacentHTML('beforeend', html);
+  document.getElementById('healthResults').innerHTML = html;
+
+  cards.forEach(c => attachSparklineTooltip(
+    document.getElementById(c.id), dates,
+    c.tooltipValues ?? c.values, c.tooltipUnit ?? c.unit, c.tooltipDecimals ?? c.decimals
+  ));
 }
 
-document.getElementById('mainContent').textContent = '';
+document.querySelectorAll('.range-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.range-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentDays = parseInt(btn.dataset.days, 10);
+    loadHealth();
+  });
+});
+
 loadHealth();
 
 // ── Theme toggle ──────────────────────────────────────────────────────────
