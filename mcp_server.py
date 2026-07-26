@@ -49,6 +49,25 @@ def _daily_summary(user_id, args):
     return {'date': log_date, 'totals': totals or {}, 'by_meal': by_slot}
 
 
+def _food_log_entries(user_id, args):
+    log_date = args.get('date') or date.today().isoformat()
+    with get_db() as db:
+        rows = db.query(
+            """SELECT c.name as meal, fi.name as food_name, fl.quantity,
+               fi.serving_size, fi.serving_unit, fl.calories_actual,
+               fi.protein_g * fl.quantity as protein_g,
+               fi.carbs_g * fl.quantity as carbs_g,
+               fi.fat_g * fl.quantity as fat_g, fl.notes
+               FROM food_log fl
+               JOIN food_items fi ON fl.food_item_id=fi.id
+               JOIN categories c ON fi.category_id=c.id
+               WHERE fl.log_date=? AND fl.user_id=?
+               ORDER BY c.sort_order, fl.logged_at""",
+            (log_date, user_id)
+        )
+    return {'date': log_date, 'entries': rows}
+
+
 def _log_history(user_id, args):
     days = int(args.get('days', 7))
     with get_db() as db:
@@ -90,6 +109,15 @@ TOOLS = [
             'properties': {'date': {'type': 'string', 'description': 'YYYY-MM-DD, defaults to today'}},
         },
         'handler': _daily_summary,
+    },
+    {
+        'name': 'get_food_log_entries',
+        'description': "Get the signed-in user's individual logged food items — name, meal, quantity, calories, and macros — for a given day (defaults to today). Use this when asked what was specifically eaten, not just calorie/macro totals.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {'date': {'type': 'string', 'description': 'YYYY-MM-DD, defaults to today'}},
+        },
+        'handler': _food_log_entries,
     },
     {
         'name': 'get_nutrition_log_history',
