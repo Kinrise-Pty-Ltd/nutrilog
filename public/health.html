@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>NutriLog · Health</title>
+<link rel="apple-touch-icon" sizes="180x180" href="/public/favicon/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/public/favicon/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/public/favicon/favicon-16x16.png">
+<link rel="shortcut icon" href="/public/favicon/favicon.ico">
+<link rel="manifest" href="/public/favicon/site.webmanifest">
 <script>
   (function() {
     var saved = localStorage.getItem('nutrilog-theme');
@@ -60,7 +65,8 @@
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
 
   .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-  .logo { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; }
+  .logo { display: flex; align-items: center; gap: 8px; font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; }
+  .logo img { height: 28px; width: auto; display: block; }
   .logo span { color: var(--accent); }
 
   .main-content { padding: 16px; padding-bottom: 90px; }
@@ -118,7 +124,7 @@ function escapeHtmlSwitcher(str) {
 </script>
 
 <div class="header">
-  <div class="logo">Nutri<span>Log</span></div>
+  <div class="logo"><img src="/public/assets/NutriLog.png" alt="">Nutri<span>Log</span></div>
   <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
 </div>
 

@@ -111,6 +111,11 @@ def static_files(filename):
     return send_from_directory('public', filename)
 
 
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory('public/favicon', 'favicon.ico')
+
+
 # ── CURRENT USER ──────────────────────────────────────────────────────────────
 
 @app.route('/api/me', methods=['GET'])
