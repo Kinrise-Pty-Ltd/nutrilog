@@ -19,6 +19,29 @@ FIELDS = [
     'exercise_minutes', 'weight_kg', 'resting_hr', 'sleep_minutes',
 ]
 
+# Health Auto Export's REST API export has its own fixed JSON shape
+# ({"data": {"metrics": [{"name": ..., "data": [{"date": ..., "qty": ...}]}]}})
+# unlike a Shortcuts automation, where you build the request body yourself
+# and can match our flat shape directly. Metric names are HealthKit
+# identifiers in snake_case; a few historical aliases are included
+# defensively since exact naming has varied across app versions.
+HEALTH_AUTO_EXPORT_METRIC_FIELDS = {
+    'step_count': 'steps',
+    'steps': 'steps',
+    'active_energy': 'active_energy_kcal',
+    'active_energy_burned': 'active_energy_kcal',
+    'basal_energy_burned': 'resting_energy_kcal',
+    'resting_energy': 'resting_energy_kcal',
+    'apple_exercise_time': 'exercise_minutes',
+    'exercise_time': 'exercise_minutes',
+    'weight_body_mass': 'weight_kg',
+    'body_mass': 'weight_kg',
+    'weight': 'weight_kg',
+    'resting_heart_rate': 'resting_hr',
+    'heart_rate_resting': 'resting_hr',
+}
+HEALTH_AUTO_EXPORT_SLEEP_METRICS = {'sleep_analysis', 'sleep'}
+
 
 def get_or_create_token(user_id):
     with get_db() as db:
@@ -66,9 +89,67 @@ def _one_day(payload):
     return day, {k: payload.get(k) for k in FIELDS}
 
 
+def _is_health_auto_export_payload(payload):
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get('data'), dict)
+        and isinstance(payload['data'].get('metrics'), list)
+    )
+
+
+def _parse_health_auto_export(payload):
+    """Converts Health Auto Export's {"data": {"metrics": [...]}} shape into
+    our internal per-day dicts, merging every metric that falls on the same
+    date into one record."""
+    by_date = {}
+    unrecognized = set()
+
+    for metric in payload['data']['metrics']:
+        name = (metric.get('name') or '').strip().lower()
+        is_sleep = name in HEALTH_AUTO_EXPORT_SLEEP_METRICS
+        field = HEALTH_AUTO_EXPORT_METRIC_FIELDS.get(name)
+        if not field and not is_sleep:
+            if name:
+                unrecognized.add(name)
+            continue
+
+        for point in metric.get('data') or []:
+            raw_date = point.get('date') or point.get('startDate') or point.get('sleepStart')
+            if not raw_date:
+                continue
+            day = raw_date[:10]  # "2026-07-26 00:00:00 +1000" / "2026-07-26T00:00:00+10:00" -> "2026-07-26"
+            record = by_date.setdefault(day, {'date': day})
+
+            if is_sleep:
+                asleep = point.get('asleep')
+                if asleep is None:
+                    asleep = point.get('value')
+                if asleep is not None:
+                    # HAE has historically reported hours asleep as a decimal
+                    # (e.g. 7.4), not minutes — treat anything <=24 as hours.
+                    record['sleep_minutes'] = round(asleep * 60 if asleep <= 24 else asleep)
+            else:
+                qty = point.get('qty')
+                if qty is not None:
+                    record[field] = round(qty, 1) if field == 'weight_kg' else round(qty)
+
+    if unrecognized:
+        print(f'[health.ingest] Unrecognized Health Auto Export metric name(s): {sorted(unrecognized)}')
+
+    return list(by_date.values())
+
+
 def ingest(user_id, payload):
-    """Accepts either a single day object or {"days": [ ... ]}."""
-    entries = payload['days'] if isinstance(payload, dict) and 'days' in payload else [payload]
+    """Accepts a single day object, {"days": [...]} (NutriLog's own flat
+    shape — e.g. a Shortcuts automation you build yourself), or Health Auto
+    Export's own REST API export shape ({"data": {"metrics": [...]}})."""
+    if _is_health_auto_export_payload(payload):
+        entries = _parse_health_auto_export(payload)
+        if not entries:
+            print(f'[health.ingest] Health Auto Export payload produced no usable day entries: {json.dumps(payload)[:2000]}')
+            raise ValueError('No recognizable health metrics found in that Health Auto Export payload')
+    else:
+        entries = payload['days'] if isinstance(payload, dict) and 'days' in payload else [payload]
 
     with get_db() as db:
         for entry in entries:
