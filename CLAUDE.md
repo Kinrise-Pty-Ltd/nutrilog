@@ -51,14 +51,34 @@ current status, see [HANDOVER.md](HANDOVER.md).
    effect once a transaction is already open, so it must be the first thing
    executed on a fresh `get_db()` connection, before any other statement.
 
+6. **A one-time data migration must be safe against concurrent gunicorn
+   workers.** This app runs `--workers 2`; each worker imports `app.py`
+   independently and calls `init_db()` at startup. A naive "check if already
+   migrated, then act" pattern isn't atomic across two processes starting at
+   the same moment — both can observe "not migrated yet" and both act.
+   `_migrate_catalog_to_per_user()` in `db.py` guards against this with an
+   `sp_getapplock` on mssql (trusting exactly one lock, held for the whole
+   check+migrate, so a second worker blocks until the first commits and then
+   correctly no-ops); sqlite doesn't need this since local dev never runs
+   multiple workers. Any *future* one-time migration needs the same guard.
+
+7. **Azure App Service terminates TLS at its own front-end and forwards to
+   this container over plain HTTP**, setting `X-Forwarded-Proto: https` on
+   the way. Flask doesn't trust that header by default, so anything built
+   from `request.url_root` / `request.scheme` (e.g. the iPhone Health ingest
+   URL shown in Admin) reports `http://` even on the live HTTPS site unless
+   `ProxyFix` is installed (see `app.py`) — already handled, but worth
+   knowing if a *new* feature ever needs to construct an absolute URL from
+   the request.
+
 ## Architecture
 
 - **No build step.** Every `public/*.html` file is a fully self-contained
   page — inline `<style>`, inline `<script>`, no bundler, no shared JS/CSS
   file (there's no mechanism to share one). When changing something
-  cross-cutting (the theme toggle, the bottom nav, the KinGroup footer),
-  it has to be edited in every page that has it. Grep for the pattern
-  first to find all copies.
+  cross-cutting (the theme toggle, the bottom nav, the KinGroup footer, the
+  header logo, the account-switcher script), it has to be edited in every
+  page that has it. Grep for the pattern first to find all copies.
 - **Dual database backend** (`db.py`): SQLite for local dev, Azure SQL in
   production, selected by whether `AZURE_SQL_CONNECTION_STRING` is set.
   Both are queried with `?` placeholders (pyodbc and sqlite3 both accept
@@ -101,6 +121,25 @@ current status, see [HANDOVER.md](HANDOVER.md).
   either hide their UI affordance or return demo data rather than erroring.
   Preserve this pattern for any new integration — don't make local dev or a
   partially-configured deployment hard-fail on a missing external credential.
+- **Health Auto Export has its own fixed JSON export shape** — unlike a
+  Shortcuts automation (where you build the request body yourself and can
+  match our flat `{"date": ..., "steps": ...}` shape directly), it always
+  sends `{"data": {"metrics": [{"name": "step_count", "data": [{"date": ...,
+  "qty": ...}]}]}}`, grouped by metric rather than by day. `health.py`'s
+  `_parse_health_auto_export()` converts this; exact metric-name naming
+  (and whether SpO2/body-fat come through as a 0-1 fraction vs a
+  percentage) hasn't been verified against a live export for every metric,
+  so an unrecognized name is logged and skipped rather than failing the
+  whole request — check `az webapp log tail` if a real export seems to be
+  missing a field.
+- **iPhone Health's optional metrics are catalog-driven, not hardcoded per
+  field.** `health.py`'s `METRIC_CATALOG` is the single source of truth
+  (label/unit/decimals/demo range) for every optional measure (beyond the
+  always-shown core four) — used by ingest, demo-data generation, and the
+  `/api/health/metrics` API alike. Adding a new optional metric means
+  adding one `METRIC_CATALOG` entry, a column via `_migrate_columns()`, and
+  (if applicable) a Health Auto Export name mapping — not touching the
+  Admin UI or Health page rendering code, which both iterate the catalog.
 
 ## Conventions
 

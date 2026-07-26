@@ -1,6 +1,6 @@
 # HANDOVER.md
 
-Project status and infrastructure map as of **25 July 2026**. This is a
+Project status and infrastructure map as of **26 July 2026**. This is a
 point-in-time snapshot, not evergreen documentation — for that, see
 [README.md](README.md) (what the app does) and [CLAUDE.md](CLAUDE.md)
 (coding conventions).
@@ -50,8 +50,12 @@ resources are on the free tier (5,000 calls/month each).
    (see below)
 
 **Enterprise Application**: "User assignment required" = **Yes** — this is
-the allow-list. Only assigned users can sign in at all. Currently assigned:
-`ruffy@kingroup.com.au`, `admin_mwebb@kingroup.com.au`. **Adding a new user
+the allow-list. Only assigned users can sign in at all. Originally just
+`ruffy@kingroup.com.au` and `admin_mwebb@kingroup.com.au`, but the `users`
+table now has 5 distinct signed-in accounts (including what look like
+domain-separated variants of the admin's own identity) — the current
+Entra allow-list wasn't re-checked as part of this snapshot, so treat the
+exact membership as **unverified**, not just these two. **Adding a new user
 to NutriLog means assigning them here in Entra ID — no code or deploy
 needed.**
 
@@ -110,46 +114,43 @@ Not yet set (Oura still blocked — see below): `OURA_CLIENT_ID`,
 | Feature | Status |
 |---|---|
 | Multi-user auth, calendar, camera scan, barcode scan | ✅ Live |
-| Per-user food catalog + delegate ("act as") access | ✅ Built, tested locally against a simulated copy of production's current data shape — **not yet deployed**, see below |
+| Per-user food catalog + delegate ("act as") access | ✅ Live — see below |
+| Voice logging, move-entry-between-meals, quick-add-new-food | ✅ Live |
 | Azure AI Vision food recognition | ✅ Live (tags + caption, two-region setup) |
-| iPhone Health | ✅ Live, but **Ruffy hasn't set up the Shortcuts automation yet** — shows demo data |
+| iPhone Health (core: steps/active energy/weight/sleep) | ✅ Live — Ruffy has Health Auto Export sending real data |
+| iPhone Health (optional measures: SpO2, HRV, body fat, VO2 max, distance, flights, mindful minutes, water) | ✅ Live, but **exact Health Auto Export field-name/unit mapping for these hasn't been confirmed against a real export** — check `az webapp log tail` for "Unrecognized Health Auto Export metric name(s)" if a newly-added one doesn't show data |
 | Oura Ring | ⚠️ **Blocked** — Ruffy needs to register an OAuth app at cloud.ouraring.com ("My Applications", redirect URI `https://nutrilog-app.azurewebsites.net/api/oura/callback`) and send the client ID/secret. Shows demo data until then. |
 | MCP server (`/api/mcp`) | ✅ Deployed and verified working standalone |
 | Copilot Studio connection | 🔧 **In progress** — see below |
+| Favicons + NutriLog logo | ✅ Live — added by a colleague (Riley Webb) via a PR outside this session's direct work; header text ("NutriLog" wordmark) was later removed in favour of just the enlarged logo image |
 
-### Per-user catalog + delegate access — what's changing, and the deploy risk
+### Per-user catalog + delegate access
 
 `categories`/`food_items` used to be one shared catalog across every user
-(deliberately, for a 2-user app). As of this work they're **per-user**:
-each user gets their own private catalog (seeded with the same starter set
-Ruffy originally had), and a stored-XSS fix was applied alongside it (see
+(deliberately, for a 2-user app). They're now **per-user**: each user has
+their own private catalog (existing users' catalogs were split via a
+one-time migration that clones the shared rows and remaps food_log history
+— nothing was deleted, the shared originals are just orphaned/invisible
+now), and a stored-XSS fix was applied alongside it (see
 `SECURITY_REVIEW.md`).
 
-New: **delegated access** — an owner can grant another Entra-assigned user
-full access to their own account (data + config) by email, self-service,
-from Admin's "Delegate Access" section. This is specifically for **Ruffy's
-executive assistant**, who needs access to his log/catalog/settings via the
-website. Before she can use it: **she needs her own KinGroup (Entra)
+**Delegated access**: an owner can grant another Entra-assigned user full
+access to their own account (data + config) by email, self-service, from
+Admin's "Delegate Access" section — built for **Ruffy's executive
+assistant**. Before she can use it: **she needs her own KinGroup (Entra)
 account assigned in the "NutriLog App Service Auth" Enterprise Application**
 (same allow-list step as any other user — see the Entra section above), and
-Ruffy needs to grant her access once from his own Admin page after that.
+Ruffy needs to grant her access once from his own Admin page after that —
+not confirmed yet whether this has actually happened.
 
-**Deploy risk**: this includes a one-time production data migration
-(`db.py`'s `_migrate_catalog_to_per_user()`) that clones the existing shared
-catalog into a private copy per existing user and remaps their food_log
-history to point at their own clone — the shared originals are left behind
-(orphaned, not deleted) rather than risking a destructive `DROP`/`DELETE`
-against production data. It also drops `categories.name`'s global `UNIQUE`
-constraint (two users both having "Breakfast" is now expected). Tested
-thoroughly against a locally-reconstructed copy of production's current
-schema+data shape (see the session that built this for the exact test
-script), including idempotency (safe to run `init_db()` twice) — but this is
-the same category of change (schema migration touching an already-populated
-production table) that caused the July 25 barcode outage, so: **take an
-Azure SQL point-in-time-restore-eligible backup point before merging this**
-(Basic tier has automatic backups, but confirm a recent restore point
-exists), and watch `az webapp log tail` through the first restart after
-deploy.
+The migration itself is deployed and was verified against a
+locally-reconstructed copy of production's pre-migration schema+data shape
+before shipping; a follow-up PR hardened it with an `sp_getapplock` (mssql)
+against a theoretical race between this app's two gunicorn workers both
+running the one-time migration simultaneously on first deploy (see
+CLAUDE.md gotcha #6) — investigated after a duplication report that turned
+out to be unrelated (multiple real sign-ins, not a bug), but the race was
+real and worth closing regardless.
 
 ### Copilot Studio integration — where it's up to
 
@@ -166,6 +167,30 @@ metadata discovery, so Dynamic Discovery would fail):
 Once it's confirmed working: it can publish to multiple Copilot Studio
 channels, including **Microsoft 365 Copilot itself** — no separate
 "declarative agent" build needed for that.
+
+## Recent work (26 July)
+
+- **HTTPS bug fix**: Azure's `httpsOnly` App Service setting was already
+  correctly enforced, but `request.url_root` (used to build the iPhone
+  Health ingest URL shown in Admin) was reporting `http://` even on the
+  live site, because Flask wasn't trusting Azure's `X-Forwarded-Proto`
+  header. Fixed with `ProxyFix` (see CLAUDE.md gotcha #7).
+- **Health Auto Export support**: the app was built assuming a Shortcuts-
+  style flat JSON body; Health Auto Export sends its own fixed
+  metrics-grouped shape instead. Added a converter for it (see CLAUDE.md).
+  A related Bearer-token-parsing bug (exact-case "Bearer " match) was also
+  fixed — real-world apps that require typing the header in by hand aren't
+  consistent about casing/spacing.
+- **iPhone Health optional metrics**: beyond the always-shown core four,
+  users can now add/remove individual extra measures (resting energy,
+  exercise minutes, resting HR, SpO2, HRV, body fat %, VO2 max, distance,
+  flights climbed, mindful minutes, water intake) from Admin. See CLAUDE.md
+  for the field-naming caveat on the newer ones.
+- **Health page**: added a 7/30/90-day range selector and interactive
+  chart details (tap/hover any sparkline for the exact date+value, plus an
+  always-visible low/high caption).
+- **Voice logging, move-entry, quick-add-new-food**: added to the main log
+  page — see README.md for what each does.
 
 ## Deferred / not started
 

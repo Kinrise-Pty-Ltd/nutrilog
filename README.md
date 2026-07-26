@@ -13,6 +13,15 @@ For infrastructure details, credentials map, and current project status, see
 
 - **Food log** (`/`) — daily log across 7 meal slots, search or scan to add
   items, quantity picker with live calorie preview, daily macro totals
+- **Voice logging** — tap the mic, say something like "two eggs for
+  breakfast"; it detects the meal (from what you said, or the time of day),
+  matches it against your catalog, and always confirms the amount before
+  logging anything. Falls back to a plain text box (still works via the
+  keyboard's own dictation button) on browsers without speech recognition.
+- **Move a logged entry** between meals — for food logged after the fact
+  under the wrong meal slot
+- **Quick-add** — if a search (typed or voice) doesn't match anything in
+  your catalog, add it as a new item on the spot instead of dead-ending
 - **Camera food recognition** — snap a photo, matched against the food
   catalog via Azure AI Vision (tags + caption)
 - **Barcode scanning** — for packaged food, scans a barcode and looks up
@@ -21,11 +30,15 @@ For infrastructure details, credentials map, and current project status, see
 - **Calendar** (`/calendar`) — Month / Week / List views over your log
 - **Oura Ring** (`/oura`) — readiness, sleep, HRV, recovery, and more (15
   metrics); shows demo data until connected
-- **iPhone Health** (`/health`) — steps, active energy, weight, sleep, via a
-  Shortcuts automation or the Health Auto Export app pushing to a bearer-token
-  ingest endpoint; shows demo data until connected
-- **Admin** (`/admin`) — manage your own food catalog, integrations, and who
-  has delegate access to your account
+- **iPhone Health** (`/health`) — steps, active energy, weight, sleep always
+  shown, plus optional measures (resting energy, exercise minutes, resting
+  HR, SpO2, HRV, body fat %, VO2 max, distance, flights climbed, mindful
+  minutes, water intake) you add/remove individually from Admin. 7/30/90-day
+  range selector, tap-or-hover any graph for the exact date/value. Fed by a
+  Shortcuts automation or the Health Auto Export app pushing to a
+  bearer-token ingest endpoint; shows demo data until connected.
+- **Admin** (`/admin`) — manage your own food catalog, integrations
+  (Oura, iPhone Health), and who has delegate access to your account
 - **Multi-user** — each signed-in user has their own private log *and*
   catalog (new users get seeded with the same starter set Ruffy originally
   had, editable independently thereafter)
