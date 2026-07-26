@@ -389,6 +389,38 @@ def add_log_entry():
         return jsonify(row), 201
 
 
+@app.route('/api/log/<entry_id>', methods=['PUT'])
+def update_log_entry(entry_id):
+    """Currently just supports moving an entry to a different meal slot
+    (e.g. logged after the fact under the wrong category) — not a general
+    field-by-field update."""
+    data = request.json or {}
+    meal_slot = data.get('meal_slot')
+    if not meal_slot:
+        return jsonify({'error': 'meal_slot is required'}), 400
+
+    with get_db() as db:
+        category = db.query_one("SELECT id FROM categories WHERE id=? AND user_id=?", (meal_slot, g.user['id']))
+        if not category:
+            return jsonify({'error': 'Category not found'}), 404
+
+        db.execute(
+            "UPDATE food_log SET meal_slot=? WHERE id=? AND user_id=?",
+            (meal_slot, entry_id, g.user['id'])
+        )
+        row = db.query_one(
+            """SELECT fl.*, fi.name as food_name, fi.serving_size, fi.serving_unit,
+               c.name as category_name, c.icon as category_icon
+               FROM food_log fl JOIN food_items fi ON fl.food_item_id=fi.id
+               JOIN categories c ON fi.category_id=c.id
+               WHERE fl.id=? AND fl.user_id=?""",
+            (entry_id, g.user['id'])
+        )
+        if not row:
+            return jsonify({'error': 'Log entry not found'}), 404
+        return jsonify(row)
+
+
 @app.route('/api/log/<entry_id>', methods=['DELETE'])
 def delete_log_entry(entry_id):
     with get_db() as db:

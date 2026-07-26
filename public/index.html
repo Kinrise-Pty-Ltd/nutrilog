@@ -109,6 +109,10 @@
   .log-entry-cals { font-size: 0.9rem; font-weight: 700; color: var(--accent); margin-right: 10px; }
   .btn-remove { background: none; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
   .btn-remove:active { color: var(--danger); }
+  .btn-move { background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+  .btn-move:active { color: var(--accent); }
+  .move-option { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 0.9rem; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 10px; }
+  .move-option:active { border-color: var(--accent); }
 
   .add-food-btn { width: 100%; background: var(--surface2); border: 1px dashed var(--border); color: var(--text-dim); border-radius: var(--radius-sm); padding: 10px; font-size: 0.85rem; cursor: pointer; text-align: center; }
   .add-food-btn:active { background: var(--border); }
@@ -339,6 +343,16 @@ function escapeHtmlSwitcher(str) {
   </div>
 </div>
 
+<!-- Move-to-another-meal modal -->
+<div class="qty-modal" id="moveModal">
+  <div class="qty-card">
+    <div class="qty-title">Move to…</div>
+    <div class="qty-subtitle" id="moveItemName"></div>
+    <div id="moveCatList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;"></div>
+    <button class="btn-cancel" id="moveCancel">Cancel</button>
+  </div>
+</div>
+
 <!-- Quantity modal -->
 <div class="qty-modal" id="qtyModal">
   <div class="qty-card">
@@ -466,6 +480,7 @@ function renderSlots() {
                   <div class="log-entry-meta">${e.quantity > 1 ? e.quantity + '× ' : ''}${escapeHtml(e.serving_size)}${escapeHtml(e.serving_unit)}</div>
                 </div>
                 <span class="log-entry-cals">${e.calories_actual} kcal</span>
+                <button class="btn-move" data-lid="${e.id}" title="Move to another meal">⇄</button>
                 <button class="btn-remove" data-lid="${e.id}">✕</button>
               </div>
             `).join('')}
@@ -484,6 +499,13 @@ function renderSlots() {
         e.stopPropagation();
         await fetch(`/api/log/${btn.dataset.lid}`, { method: 'DELETE' });
         refresh();
+      });
+    });
+
+    card.querySelectorAll('.btn-move').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMoveModal(btn.dataset.lid);
       });
     });
 
@@ -598,6 +620,44 @@ document.getElementById('quickAddCancel').onclick = () => {
   document.getElementById('quickAddModal').classList.remove('open');
   document.getElementById('foodModal').classList.add('open');
 };
+
+// ── Move a logged entry to a different meal slot ──────────────────────────
+// For food logged after the fact under the wrong meal ("had this 2 hours
+// ago, only entering it now") — doesn't touch quantity or the food item
+// itself, just re-files it under a different category.
+let moveEntryId = null;
+
+function openMoveModal(entryId) {
+  const entry = logEntries.find(e => e.id === entryId);
+  if (!entry) return;
+  moveEntryId = entryId;
+
+  document.getElementById('moveItemName').textContent = entry.food_name;
+  const list = document.getElementById('moveCatList');
+  list.innerHTML = categories
+    .filter(c => c.id !== entry.meal_slot)
+    .map(c => `<button class="move-option" data-cat="${c.id}"><span>${escapeHtml(c.icon)}</span><span>${escapeHtml(c.name)}</span></button>`)
+    .join('');
+
+  list.querySelectorAll('[data-cat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const targetSlot = btn.dataset.cat;
+      const res = await fetch(`/api/log/${moveEntryId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meal_slot: targetSlot })
+      });
+      if (!res.ok) { alert((await res.json()).error || 'Could not move item'); return; }
+      document.getElementById('moveModal').classList.remove('open');
+      openSlots.add(targetSlot);
+      refresh();
+    });
+  });
+
+  document.getElementById('moveModal').classList.add('open');
+}
+
+document.getElementById('moveCancel').onclick = () => document.getElementById('moveModal').classList.remove('open');
 
 document.getElementById('searchInput').addEventListener('input', e => renderFoodList(e.target.value));
 document.getElementById('closeModal').onclick = () => document.getElementById('foodModal').classList.remove('open');
