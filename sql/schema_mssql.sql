@@ -112,6 +112,15 @@ CREATE TABLE dbo.iphone_health_tokens (
 );
 GO
 
+IF OBJECT_ID('dbo.mirror_api_tokens', 'U') IS NULL
+CREATE TABLE dbo.mirror_api_tokens (
+    user_id NVARCHAR(64) PRIMARY KEY,
+    api_token NVARCHAR(128) NOT NULL UNIQUE,
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    FOREIGN KEY (user_id) REFERENCES dbo.users(id)
+);
+GO
+
 IF OBJECT_ID('dbo.iphone_health_daily', 'U') IS NULL
 CREATE TABLE dbo.iphone_health_daily (
     id NVARCHAR(64) PRIMARY KEY,

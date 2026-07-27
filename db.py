@@ -10,6 +10,7 @@ sqlite3 both accept this), so almost all query code is backend-agnostic.
 import os
 import sqlite3
 import uuid
+from datetime import date
 
 BACKEND = 'mssql' if os.environ.get('AZURE_SQL_CONNECTION_STRING') else 'sqlite'
 
@@ -64,6 +65,36 @@ def get_db():
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
     return Db(conn)
+
+
+def insert_food_log_entry(user_id, food_item_id, meal_slot, quantity, log_date=None, notes=None):
+    """Shared by the /api/log POST route and the Mirror integration's voice
+    logging — one insert path, not two. Raises ValueError if the item (or
+    the meal_slot category) doesn't belong to this user."""
+    log_date = log_date or date.today().isoformat()
+    with get_db() as db:
+        item = db.query_one(
+            "SELECT calories FROM food_items WHERE id=? AND user_id=?", (food_item_id, user_id)
+        )
+        if not item:
+            raise ValueError('Food item not found')
+
+        log_id = str(uuid.uuid4())
+        calories_actual = int(item['calories'] * quantity)
+        db.execute(
+            """INSERT INTO food_log (id, user_id, food_item_id, meal_slot, log_date, quantity, calories_actual, notes)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (log_id, user_id, food_item_id, meal_slot, log_date, quantity, calories_actual, notes)
+        )
+        row = db.query_one(
+            """SELECT fl.*, fi.name as food_name, fi.serving_size, fi.serving_unit,
+               c.name as category_name, c.icon as category_icon
+               FROM food_log fl JOIN food_items fi ON fl.food_item_id=fi.id
+               JOIN categories c ON fl.meal_slot=c.id
+               WHERE fl.id=?""",
+            (log_id,)
+        )
+        return row
 
 
 def init_db():
