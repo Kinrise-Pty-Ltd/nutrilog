@@ -160,22 +160,34 @@ def resolve_meal(user_id, meal_name=None):
 
 # ── Food matching ───────────────────────────────────────────────────────
 
-_WORD_RE = re.compile(r"[a-z0-9]+")
+# Digits are dropped entirely by the word regex below — a catalog item like
+# "Whole Eggs (2)" has a decorative pack-size annotation, not a searchable
+# word, and a spoken quantity ("two eggs") belongs in the separate `quantity`
+# field, not the name match. These fillers are stripped the same way so
+# "two whole eggs" still matches "Whole Eggs" cleanly.
+_WORD_RE = re.compile(r"[a-z]+")
+_STOPWORDS = {
+    'a', 'an', 'the', 'some', 'my', 'of',
+    'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+}
 
 
-def _tokens(text):
-    return set(_WORD_RE.findall(text.lower()))
+def _clean_words(text):
+    """List, not set — preserves word order so prefix ("startswith") matching
+    still behaves sensibly after filler words are removed."""
+    return [w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS]
 
 
 def _score(query, item_name):
-    q, n = query.lower().strip(), item_name.lower().strip()
+    q_words, n_words = _clean_words(query), _clean_words(item_name)
+    q, n = ' '.join(q_words), ' '.join(n_words)
+    if not q or not n:
+        return 0
     if q == n:
         return 100
     if n.startswith(q) or q.startswith(n):
         return 80
-    q_tokens, n_tokens = _tokens(query), _tokens(item_name)
-    if not q_tokens or not n_tokens:
-        return 0
+    q_tokens, n_tokens = set(q_words), set(n_words)
     if q_tokens.issubset(n_tokens):
         return 60 + 10 * (len(q_tokens) / len(n_tokens))
     overlap = q_tokens & n_tokens
