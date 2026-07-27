@@ -83,6 +83,13 @@ explicitly disabled), `unauthenticatedClientAction: RedirectToLoginPage`.
 else, including every page route and all of `/api/*`, still requires an
 Entra sign-in):
 - `/api/health/ingest` — Health Auto Export's bearer-token ingest, see CLAUDE.md
+- `/api/mirror/summary`, `/api/mirror/log`, `/api/mirror/history` — Mirror
+  avatar project's bearer-token routes, same reasoning as health/ingest
+  above. **Needs to be added to this list after this deploys** (not done as
+  part of the code change — `az webapp auth update`, one exact path each,
+  same as the icon files below). `/api/mirror/token*` (the Admin page's own
+  view/regenerate) deliberately stays off this list — that's a normal
+  session route, not something Mirror's backend calls directly.
 - `/public/favicon/apple-touch-icon.png`, `favicon.ico`, `favicon-16x16.png`,
   `favicon-32x32.png`, `android-chrome-192x192.png`, `android-chrome-512x512.png`,
   `site.webmanifest`, and `/public/assets/NutriLog.png` — added 27 July so
@@ -230,6 +237,30 @@ channels, including **Microsoft 365 Copilot itself** — no separate
 - **"Add to Home Screen" icon fix**: see the Easy Auth section above —
   `excludedPaths` needed the icon/manifest files added by exact path
   (wildcard doesn't work). Confirmed fixed on a real device.
+
+## Recent work (27 July, continued) — Mirror integration
+
+- Added `/api/mirror/*` (new `mirror_integration.py`, new `mirror_api_tokens`
+  table, new Admin "Mirror Integration" section) so the separate Mirror
+  avatar project can read a user's nutrition data and log new entries from a
+  voice command — same bearer-token pattern as the iPhone Health ingest
+  endpoint, scoped to `ruffy@kingroup.com.au`. Matching (food query → catalog
+  item, meal name/time-of-day → category) is deliberately conservative: an
+  ambiguous or unrecognized query returns candidates instead of writing a
+  guess. See `mirror_integration.py`'s module docstring.
+- **Found and fixed a real pre-existing bug while testing this**: every
+  query joining `food_log` to `categories` (the main `GET /api/log`, the
+  "move to a different meal" `PUT /api/log/<id>`, both MCP tools, and now
+  `insert_food_log_entry()`) joined on `fi.category_id` — the food *item's
+  own catalog category* — instead of `fl.meal_slot`, the meal the entry was
+  actually logged/moved under. Silently wrong whenever those diverge (e.g.
+  after using "move to another meal", or logging something under a
+  non-default meal). Never visible in the main app's own UI, which computes
+  its own grouping from `meal_slot` directly and never reads the affected
+  `category_name`/`meal` field — but it did affect the MCP tools' `meal`
+  field (Copilot Studio would report the wrong meal). Fixed at every site by
+  joining on `fl.meal_slot=c.id` instead; confirmed locally (moved an entry,
+  confirmed both `/api/log` and an MCP tool call reflect the new meal).
 
 ## Deferred / not started
 

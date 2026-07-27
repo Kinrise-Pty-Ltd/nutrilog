@@ -246,6 +246,17 @@ function escapeHtmlSwitcher(str) {
     </div>
     <div id="healthSetupDetail"></div>
   </div>
+
+  <div class="integration-card" style="margin-top:10px;flex-direction:column;align-items:stretch;">
+    <div class="ic-left" style="margin-bottom:12px;">
+      <div class="ic-icon">🪞</div>
+      <div>
+        <div class="ic-name">Mirror Integration</div>
+        <div class="ic-status" id="mirrorStatus">Checking…</div>
+      </div>
+    </div>
+    <div id="mirrorSetupDetail"></div>
+  </div>
 </div>
 
 <div class="integrations">
@@ -790,6 +801,43 @@ async function loadHealthIntegration() {
   };
 }
 
+// ── Mirror integration ─────────────────────────────────────────────────────
+async function loadMirrorIntegration() {
+  const tokenInfo = await fetch('/api/mirror/token').then(r => r.json());
+
+  document.getElementById('mirrorStatus').textContent = 'Token ready — paste it into the Mirror avatar project';
+
+  const detail = document.getElementById('mirrorSetupDetail');
+  detail.innerHTML = `
+    <div class="ic-status" style="margin-bottom:10px;">
+      Lets the Mirror avatar project read your nutrition log and add entries on your behalf when you talk to it.
+      Set this token as <code>NUTRILOG_API_TOKEN</code> in Mirror's backend configuration.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <input readonly id="mirrorToken" type="password" class="form-control" value="${tokenInfo.token}" style="font-family:monospace;font-size:0.78rem;">
+      <button class="btn-sm secondary" id="toggleMirrorToken">Show</button>
+      <button class="btn-sm secondary" id="copyMirrorToken">Copy</button>
+    </div>
+    <button id="regenMirrorToken" style="background:none;border:none;color:var(--danger);font-size:0.78rem;cursor:pointer;text-decoration:underline;padding:0;">Regenerate token (invalidates the old one)</button>
+  `;
+
+  document.getElementById('copyMirrorToken').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('mirrorToken').value);
+    showToast('Token copied');
+  };
+  document.getElementById('toggleMirrorToken').onclick = () => {
+    const input = document.getElementById('mirrorToken');
+    input.type = input.type === 'password' ? 'text' : 'password';
+  };
+  document.getElementById('regenMirrorToken').onclick = async () => {
+    if (!confirm('This invalidates the current token — Mirror will need to be updated with the new one. Continue?')) return;
+    const res = await fetch('/api/mirror/token/regenerate', { method: 'POST' });
+    const data = await res.json();
+    document.getElementById('mirrorToken').value = data.token;
+    showToast('New token generated');
+  };
+}
+
 function renderHealthMetricsList(metrics) {
   const list = document.getElementById('healthMetricsList');
   list.innerHTML = metrics.map(m => `
@@ -875,6 +923,7 @@ loadWelcome();
 loadCategories();
 loadOuraIntegration();
 loadHealthIntegration();
+loadMirrorIntegration();
 loadDelegates();
 </script>
 </body>

@@ -9,10 +9,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import barcode
 import health
 import mcp_server
+import mirror_integration
 import oura
 import vision
 from auth import load_current_user
-from db import get_db, init_db
+from db import get_db, init_db, insert_food_log_entry
 
 app = Flask(__name__, static_folder='public')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-only-insecure-key')
@@ -46,6 +47,23 @@ def attach_user():
         auth_header = request.headers.get('Authorization', '').strip()
         token = re.sub(r'(?i)^bearer\s+', '', auth_header).strip()
         user_id = health.user_id_for_token(token)
+        if not user_id:
+            return jsonify({'error': 'Invalid or missing token'}), 401
+        with get_db() as db:
+            g.user = db.query_one("SELECT * FROM users WHERE id=?", (user_id,))
+        g.real_user = g.user
+        return
+
+    # Mirror (the avatar project) has no Easy Auth session either — same
+    # bearer-token pattern as /api/health/ingest above, scoped to exactly
+    # these three read/write data routes. Deliberately NOT a prefix match:
+    # /api/mirror/token* (the Admin page's token view/regenerate) stays
+    # behind the normal Easy Auth session below, since that's a browser
+    # route, not something Mirror's backend calls.
+    if request.path in ('/api/mirror/summary', '/api/mirror/log', '/api/mirror/history'):
+        auth_header = request.headers.get('Authorization', '').strip()
+        token = re.sub(r'(?i)^bearer\s+', '', auth_header).strip()
+        user_id = mirror_integration.user_id_for_token(token)
         if not user_id:
             return jsonify({'error': 'Invalid or missing token'}), 401
         with get_db() as db:
@@ -371,7 +389,7 @@ def get_log():
                c.name as category_name, c.icon as category_icon
                FROM food_log fl
                JOIN food_items fi ON fl.food_item_id=fi.id
-               JOIN categories c ON fi.category_id=c.id
+               JOIN categories c ON fl.meal_slot=c.id
                WHERE fl.log_date=? AND fl.user_id=?
                ORDER BY c.sort_order, fl.logged_at""",
             (log_date, g.user['id'])
@@ -382,33 +400,15 @@ def get_log():
 @app.route('/api/log', methods=['POST'])
 def add_log_entry():
     data = request.json
-    log_id = str(uuid.uuid4())
-    log_date = data.get('log_date', date.today().isoformat())
     quantity = float(data.get('quantity', 1.0))
-
-    with get_db() as db:
-        item = db.query_one(
-            "SELECT calories FROM food_items WHERE id=? AND user_id=?", (data['food_item_id'], g.user['id'])
+    log_date = data.get('log_date', date.today().isoformat())
+    try:
+        row = insert_food_log_entry(
+            g.user['id'], data['food_item_id'], data['meal_slot'], quantity, log_date, data.get('notes')
         )
-        if not item:
-            return jsonify({'error': 'Food item not found'}), 404
-
-        calories_actual = int(item['calories'] * quantity)
-        db.execute(
-            """INSERT INTO food_log (id, user_id, food_item_id, meal_slot, log_date, quantity, calories_actual, notes)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (log_id, g.user['id'], data['food_item_id'], data['meal_slot'], log_date,
-             quantity, calories_actual, data.get('notes'))
-        )
-        row = db.query_one(
-            """SELECT fl.*, fi.name as food_name, fi.serving_size, fi.serving_unit,
-               c.name as category_name, c.icon as category_icon
-               FROM food_log fl JOIN food_items fi ON fl.food_item_id=fi.id
-               JOIN categories c ON fi.category_id=c.id
-               WHERE fl.id=?""",
-            (log_id,)
-        )
-        return jsonify(row), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    return jsonify(row), 201
 
 
 @app.route('/api/log/<entry_id>', methods=['PUT'])
@@ -434,7 +434,7 @@ def update_log_entry(entry_id):
             """SELECT fl.*, fi.name as food_name, fi.serving_size, fi.serving_unit,
                c.name as category_name, c.icon as category_icon
                FROM food_log fl JOIN food_items fi ON fl.food_item_id=fi.id
-               JOIN categories c ON fi.category_id=c.id
+               JOIN categories c ON fl.meal_slot=c.id
                WHERE fl.id=? AND fl.user_id=?""",
             (entry_id, g.user['id'])
         )
@@ -764,6 +764,48 @@ def health_ingest():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ingested': count})
+
+
+# ── MIRROR INTEGRATION (avatar project — read + voice-driven logging) ─────────
+
+@app.route('/api/mirror/token', methods=['GET'])
+def mirror_token():
+    """Admin-page route — normal Easy Auth session, not the bearer token."""
+    token = mirror_integration.get_or_create_token(g.user['id'])
+    return jsonify({'token': token})
+
+
+@app.route('/api/mirror/token/regenerate', methods=['POST'])
+def mirror_token_regenerate():
+    return jsonify({'token': mirror_integration.regenerate_token(g.user['id'])})
+
+
+@app.route('/api/mirror/summary', methods=['GET'])
+def mirror_summary():
+    """Bearer-token route (see attach_user()) — called by Mirror's backend."""
+    return jsonify(mirror_integration.get_daily_summary(g.user['id'], request.args.get('date')))
+
+
+@app.route('/api/mirror/log', methods=['GET'])
+def mirror_log_get():
+    return jsonify(mirror_integration.get_log_entries(g.user['id'], request.args.get('date')))
+
+
+@app.route('/api/mirror/log', methods=['POST'])
+def mirror_log_post():
+    data = request.json or {}
+    query = data.get('query')
+    if not query:
+        return jsonify({'error': 'query is required'}), 400
+    result = mirror_integration.log_entry(
+        g.user['id'], query, data.get('meal'), float(data.get('quantity', 1.0)), data.get('log_date')
+    )
+    return jsonify(result), (201 if result['matched'] else 200)
+
+
+@app.route('/api/mirror/history', methods=['GET'])
+def mirror_history():
+    return jsonify(mirror_integration.get_history(g.user['id'], int(request.args.get('days', 7))))
 
 
 # ── MCP SERVER (for Copilot Studio / other MCP clients) ───────────────────────

@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS iphone_health_tokens (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS mirror_api_tokens (
+    user_id TEXT PRIMARY KEY,
+    api_token TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS iphone_health_daily (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

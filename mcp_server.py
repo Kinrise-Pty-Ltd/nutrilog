@@ -40,8 +40,7 @@ def _daily_summary(user_id, args):
         by_slot = db.query(
             """SELECT c.name as meal, SUM(fl.calories_actual) as calories, COUNT(*) as items
                FROM food_log fl
-               JOIN food_items fi ON fl.food_item_id=fi.id
-               JOIN categories c ON fi.category_id=c.id
+               JOIN categories c ON fl.meal_slot=c.id
                WHERE fl.log_date=? AND fl.user_id=?
                GROUP BY c.name""",
             (log_date, user_id)
@@ -60,7 +59,7 @@ def _food_log_entries(user_id, args):
                fi.fat_g * fl.quantity as fat_g, fl.notes
                FROM food_log fl
                JOIN food_items fi ON fl.food_item_id=fi.id
-               JOIN categories c ON fi.category_id=c.id
+               JOIN categories c ON fl.meal_slot=c.id
                WHERE fl.log_date=? AND fl.user_id=?
                ORDER BY c.sort_order, fl.logged_at""",
             (log_date, user_id)

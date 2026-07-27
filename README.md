@@ -49,6 +49,13 @@ For infrastructure details, credentials map, and current project status, see
   `/api/act-as` routes.
 - **MCP server** (`/api/mcp`) — exposes a user's data to MCP clients (e.g. a
   Copilot Studio agent) as read-only tools
+- **Mirror integration** (`/api/mirror/*`) — lets the separate Mirror avatar
+  project read a user's nutrition summary/log/history and log new entries
+  from a voice command, authenticated by its own per-user bearer token
+  (same design as the iPhone Health ingest token below), managed from
+  Admin's "Mirror Integration" section. Food/meal matching is deliberately
+  conservative: an ambiguous or unrecognized query returns candidates
+  instead of guessing and writing the wrong thing. See `mirror_integration.py`.
 - Light/dark theme toggle
 
 ## Local development
@@ -96,6 +103,7 @@ Python modules on the backend:
 | `oura.py` | Oura OAuth2 + data fetch/cache + demo data |
 | `health.py` | iPhone Health bearer-token ingest + demo data |
 | `mcp_server.py` | MCP protocol (JSON-RPC) for Copilot Studio / other clients |
+| `mirror_integration.py` | Bearer-token auth, food/meal matching, and logging for the Mirror avatar project |
 | `migrate.py` | One-off SQLite → Azure SQL migration script |
 
 ## Deployment
